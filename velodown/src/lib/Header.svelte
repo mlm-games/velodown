@@ -1,18 +1,10 @@
-<script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  const dispatch = createEventDispatcher();
-
-  function goTo(view: string) {
-    dispatch('navigate', { view });
-  }
-</script>
-
+<!-- src/lib/Header.svelte -->
 <header>
   <h1>VeloDown</h1>
   <nav>
-    <button on:click={() => goTo('downloads')}>Downloads</button>
-    <button on:click={() => goTo('add')}>Add New</button>
-    <button on:click={() => goTo('settings')}>Settings</button>
+    <a href="/">Downloads</a>
+    <a href="/add">Add New</a>
+    <a href="/settings">Settings</a>
   </nav>
 </header>
 
@@ -28,7 +20,12 @@
   h1 {
     margin: 0;
   }
-  button {
-    margin-left: 10px;
+  a {
+    margin-left: 15px;
+    color: #f0f0f0;
+    text-decoration: none;
+  }
+  a:hover {
+    text-decoration: underline;
   }
 </style>
