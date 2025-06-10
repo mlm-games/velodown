@@ -5,6 +5,7 @@ use serde::{Serialize, Deserialize};
 use std::sync::Mutex;
 use tauri::{Manager, State, Window};
 use tokio::time::{sleep, Duration};
+use tauri::Emitter;
 
 // --- 1. The data structures for our application ---
 

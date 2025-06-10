@@ -1,27 +1,33 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "velodown",
+  "productName": "VeloDown",
   "version": "0.1.0",
-  "identifier": "org.velodown.app",
+  "identifier": "com.velodown.dev",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
-    "frontendDist": "../build"
+    "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
-        "title": "velodown",
+        "title": "VeloDown",
         "width": 800,
         "height": 600,
+        "resizable": true,
+        "fullscreen": false,
         "theme": "Dark"
-        "fullscreen": false
       }
     ],
     "security": {
       "csp": null
-    }
+    },
+    "trayIcon": {
+      "iconPath": "icons/32x32.png",
+      "iconAsTemplate": true
+    },
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,
@@ -33,5 +39,27 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    },
+    "notification": {
+      "all": true
+    },
+    "window": {
+      "all": false,
+      "close": true,
+      "hide": true,
+      "show": true,
+      "maximize": true,
+      "minimize": true,
+      "unmaximize": true,
+      "unminimize": true,
+      "startDragging": true
+    },
+    "event": {
+      "all": true
+    }
   }
 }
