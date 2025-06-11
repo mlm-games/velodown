@@ -1,54 +1,210 @@
-name: 'Publish to AUR'
+name: Publish to AUR
 
 on:
   workflow_dispatch:
     inputs:
       version_name:
-        description: 'App version to publish (e.g., 0.1.2)'
+        description: 'Version name (e.g., 0.1.0)'
         required: true
+      increment_pkgrel:
+        description: 'Increment pkgrel (for same version updates)'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
-  publish-aur:
+  update-aur:
     runs-on: ubuntu-latest
     steps:
-      - name: Download AppImage from GitHub Release
+      - uses: actions/checkout@v4
+      
+      - name: Download AppImage from release
         run: |
-          wget "https://github.com/${{ github.repository }}/releases/download/v${{ inputs.version_name }}/VeloDown_${{ inputs.version_name }}_amd64.AppImage" -O velodown.AppImage
+          mkdir -p downloads
+          wget -O downloads/velodown.AppImage "https://github.com/${{ github.repository }}/releases/download/v${{ inputs.version_name }}/velodown_${{ inputs.version_name }}_amd64.AppImage"
+      
+      - name: Extract files from AppImage
+        run: |
+          cd downloads
           chmod +x velodown.AppImage
-
-      - name: Calculate SHA256 checksum
-        id: checksum
-        run: echo "sha256=$(sha256sum velodown.AppImage | cut -d' ' -f1)" >> $GITHUB_OUTPUT
-
+          ./velodown.AppImage --appimage-extract
+          cd ..
+      
+      - name: Create desktop file
+        run: |
+          mkdir -p desktop
+          cat > desktop/velodown.desktop << 'EOF'
+          [Desktop Entry]
+          Name=VeloDown
+          Comment=A powerful download manager built with Tauri
+          GenericName=Download Manager
+          Exec=velodown %U
+          Icon=velodown
+          Terminal=false
+          Type=Application
+          Categories=Network;FileTransfer;Qt;
+          MimeType=x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/magnet;
+          StartupNotify=true
+          Keywords=download;manager;accelerator;
+          Actions=new-window;
+          
+          [Desktop Action new-window]
+          Name=Open a New Window
+          Exec=velodown --new-window
+          EOF
+      
+      - name: Calculate SHA256 checksums
+        id: checksums
+        run: |
+          APPIMAGE_HASH=$(sha256sum downloads/velodown.AppImage | cut -d ' ' -f 1)
+          echo "appimage_hash=$APPIMAGE_HASH" >> $GITHUB_OUTPUT
+      
+      - name: Get current pkgrel from AUR
+        id: current_pkgrel
+        run: |
+          # Try to get current PKGBUILD from AUR
+          CURRENT_PKGREL=$(curl -s "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=velodown-bin" | grep "^pkgrel=" | cut -d= -f2 || echo "0")
+          echo "current_pkgrel=$CURRENT_PKGREL" >> $GITHUB_OUTPUT
+        continue-on-error: true
+      
+      - name: Determine pkgrel
+        id: pkgrel
+        run: |
+          if [[ "${{ inputs.increment_pkgrel }}" == "true" ]]; then
+            CURRENT=${{ steps.current_pkgrel.outputs.current_pkgrel }}
+            NEW_PKGREL=$((CURRENT + 1))
+            echo "pkgrel=$NEW_PKGREL" >> $GITHUB_OUTPUT
+          else
+            echo "pkgrel=1" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Create PKGBUILD
+        run: |
+          mkdir -p aur-package
+          cat > aur-package/PKGBUILD << 'EOF'
+          # Maintainer: Your Name <your.email@example.com>
+          pkgname=velodown-bin
+          pkgver=${{ inputs.version_name }}
+          pkgrel=${{ steps.pkgrel.outputs.pkgrel }}
+          pkgdesc="A powerful download manager built with Tauri"
+          arch=('x86_64')
+          url="https://github.com/${{ github.repository }}"
+          license=('MIT')
+          depends=('gtk3' 'webkit2gtk' 'libappindicator-gtk3' 'librsvg' 'nss' 'xdotool')
+          optdepends=('libnotify: for desktop notifications')
+          provides=('velodown')
+          conflicts=('velodown')
+          options=('!strip' '!emptydirs')
+          source_x86_64=("velodown-${pkgver}.AppImage::https://github.com/${{ github.repository }}/releases/download/v${pkgver}/velodown_${pkgver}_amd64.AppImage"
+                         "velodown.desktop")
+          sha256sums_x86_64=('${{ steps.checksums.outputs.appimage_hash }}'
+                             'SKIP')
+          noextract=("velodown-${pkgver}.AppImage")
+          
+          prepare() {
+              # Create desktop file
+              cat > "${srcdir}/velodown.desktop" << DESKTOP_EOF
+          [Desktop Entry]
+          Name=VeloDown
+          Comment=A powerful download manager built with Tauri
+          GenericName=Download Manager
+          Exec=/opt/velodown/velodown.AppImage %U
+          Icon=velodown
+          Terminal=false
+          Type=Application
+          Categories=Network;FileTransfer;Qt;
+          MimeType=x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/magnet;
+          StartupNotify=true
+          Keywords=download;manager;accelerator;
+          Actions=new-window;
+          
+          [Desktop Action new-window]
+          Name=Open a New Window
+          Exec=/opt/velodown/velodown.AppImage --new-window
+          DESKTOP_EOF
+          
+              # Extract AppImage for icons
+              chmod +x "${srcdir}/velodown-${pkgver}.AppImage"
+              "${srcdir}/velodown-${pkgver}.AppImage" --appimage-extract > /dev/null 2>&1
+          }
+          
+          package() {
+              # Install AppImage
+              install -Dm755 "${srcdir}/velodown-${pkgver}.AppImage" "${pkgdir}/opt/velodown/velodown.AppImage"
+              
+              # Create executable symlink
+              install -d "${pkgdir}/usr/bin"
+              cat > "${pkgdir}/usr/bin/velodown" << WRAPPER_EOF
+          #!/bin/bash
+          exec /opt/velodown/velodown.AppImage "\$@"
+          WRAPPER_EOF
+              chmod 755 "${pkgdir}/usr/bin/velodown"
+              
+              # Install desktop file
+              install -Dm644 "${srcdir}/velodown.desktop" "${pkgdir}/usr/share/applications/velodown.desktop"
+              
+              # Install icons from extracted AppImage
+              if [ -d "${srcdir}/squashfs-root" ]; then
+                  # Try multiple possible icon locations
+                  for icon_path in \
+                      "${srcdir}/squashfs-root/usr/share/icons/hicolor/128x128/apps/com.velodown.dev.png" \
+                      "${srcdir}/squashfs-root/usr/share/icons/hicolor/256x256/apps/com.velodown.dev.png" \
+                      "${srcdir}/squashfs-root/com.velodown.dev.png" \
+                      "${srcdir}/squashfs-root/velodown.png"; do
+                      if [ -f "$icon_path" ]; then
+                          install -Dm644 "$icon_path" "${pkgdir}/usr/share/pixmaps/velodown.png"
+                          break
+                      fi
+                  done
+                  
+                  # Install all available icon sizes
+                  for size in 16x16 32x32 48x48 64x64 128x128 256x256 512x512; do
+                      icon_file="${srcdir}/squashfs-root/usr/share/icons/hicolor/${size}/apps/com.velodown.dev.png"
+                      if [ -f "$icon_file" ]; then
+                          install -Dm644 "$icon_file" "${pkgdir}/usr/share/icons/hicolor/${size}/apps/velodown.png"
+                      fi
+                  done
+              fi
+          }
+          EOF
+      
+      - name: Create .SRCINFO
+        run: |
+          cd aur-package
+          cat > .SRCINFO << 'EOF'
+          pkgbase = velodown-bin
+          	pkgdesc = A powerful download manager built with Tauri
+          	pkgver = ${{ inputs.version_name }}
+          	pkgrel = ${{ steps.pkgrel.outputs.pkgrel }}
+          	url = https://github.com/${{ github.repository }}
+          	arch = x86_64
+          	license = MIT
+          	depends = gtk3
+          	depends = webkit2gtk
+          	depends = libappindicator-gtk3
+          	depends = librsvg
+          	depends = nss
+          	depends = xdotool
+          	optdepends = libnotify: for desktop notifications
+          	provides = velodown
+          	conflicts = velodown
+          	noextract = velodown-${{ inputs.version_name }}.AppImage
+          	options = !strip
+          	options = !emptydirs
+          	source_x86_64 = velodown-${{ inputs.version_name }}.AppImage::https://github.com/${{ github.repository }}/releases/download/v${{ inputs.version_name }}/velodown_${{ inputs.version_name }}_amd64.AppImage
+          	source_x86_64 = velodown.desktop
+          	sha256sums_x86_64 = ${{ steps.checksums.outputs.appimage_hash }}
+          	sha256sums_x86_64 = SKIP
+          
+          pkgname = velodown-bin
+          EOF
+      
       - name: Publish to AUR
         uses: KSXGitHub/github-actions-deploy-aur@master
         with:
           pkgname: velodown-bin
-          
-          pkgbuild: |
-            # Maintainer: Your Name <your.email@example.com>
-            pkgname=velodown-bin
-            pkgver=${{ inputs.version_name }}
-            pkgrel=1
-            pkgdesc="A powerful download manager built with Tauri."
-            arch=('x86_64')
-            url="https://github.com/${{ github.repository }}"
-            license=('MIT')
-            depends=('gtk3' 'webkit2gtk' 'appmenu-gtk-module')
-            provides=('velodown')
-            conflicts=('velodown')
-            source_x86_64=("${pkgname}-${pkgver}.AppImage::${url}/releases/download/v${pkgver}/${pkgname%'-bin'}_${pkgver}_amd64.AppImage")
-            sha256sums_x86_64=('${{ steps.checksum.outputs.sha256 }}')
-
-            package() {
-              install -Dm755 "${srcdir}/${pkgname}-${pkgver}.AppImage" "${pkgdir}/usr/bin/velodown"
-              install -Dm644 "${srcdir}/usr/share/icons/hicolor/128x128/apps/com.velodown.dev.png" "${pkgdir}/usr/share/pixmaps/velodown.png"
-              install -Dm644 "${srcdir}/usr/share/applications/com.velodown.dev.desktop" "${pkgdir}/usr/share/applications/velodown.desktop"
-            }
-
+          pkgbuild: aur-package/PKGBUILD
           commit_username: ${{ github.actor }}
           commit_email: ${{ github.actor }}@users.noreply.github.com
-
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          
-          commit_message: "Update to v${{ inputs.version_name }}"
+          commit_message: "Update to version ${{ inputs.version_name }}-${{ steps.pkgrel.outputs.pkgrel }}"
