@@ -60,7 +60,7 @@
           <span class="url">{download.url}</span>
           <span class="status">{download.status}</span>
           <div class="progress-bar">
-            <div class="progress" style="width: {download.progress}%" />
+            <div class="progress" style="width: {download.progress}%"></div>
           </div>
         </div>
       {/each}
