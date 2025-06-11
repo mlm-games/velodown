@@ -4,11 +4,8 @@ name: 'Release'
 on:
   workflow_dispatch:
     inputs:
-      version_name:
-        description: 'Release version (e.g., 0.1.2)'
-        required: true
       mark_prerelease:
-        description: 'Mark as a pre-release?'
+        description: 'Mark as a pre-release? (true/false)'
         required: true
         default: 'false'
         type: boolean
@@ -20,47 +17,49 @@ on:
       publish_to_snap:
         description: 'Publish to Snapcraft?'
         required: false
-        default: 'true'
+        default: 'false'
         type: boolean
 
 jobs:
   version-and-changelog:
     runs-on: ubuntu-latest
     permissions:
-      contents: write 
+      contents: write
+    outputs:
+      new_version: ${{ steps.changelog.outputs.new_version }}
+      new_tag: ${{ steps.changelog.outputs.tag }}
+      changelog: ${{ steps.changelog.outputs.clean_changelog }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-        
           fetch-depth: 0
-    
-      - name: Generate Changelog and Create Tag
+
+      - name: Conventional Changelog Action
         id: changelog
         uses: TriPSs/conventional-changelog-action@v5
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           tag-prefix: 'v'
-        
-          release-version: ${{ inputs.version_name }}
 
-    
-      - name: Update Versions in Files
+      - name: Update tauri.conf.json version
+        if: steps.changelog.outputs.skipped == 'false'
         run: |
-          npm version ${{ inputs.version_name }} --no-git-tag-version
-          sed -i 's/"version": ".*"/"version": "${{ inputs.version_name }}"/' src-tauri/tauri.conf.json
+          echo "New version from changelog action: ${{ steps.changelog.outputs.new_version }}"
+          sed -i 's/"version": ".*"/"version": "${{ steps.changelog.outputs.new_version }}"/' src-tauri/tauri.conf.json
+          echo "Updated tauri.conf.json"
 
       - name: Commit and Push Version Changes
+        if: steps.changelog.outputs.skipped == 'false'
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: 'chore: Bump version to ${{ inputs.version_name }}'
-          tagging_message: 'v${{ inputs.version_name }}'
-        
+          commit_message: 'chore(release): Bump version to ${{ steps.changelog.outputs.new_version }}'
           push_options: '--force --tags'
-
 
   build-and-release:
     needs: version-and-changelog
+    if: needs.version-and-changelog.outputs.new_version != ''
     permissions:
       contents: write
     strategy:
@@ -97,17 +96,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-        
-          tagName: 'v${{ inputs.version_name }}'
-          releaseName: 'VeloDown v${{ inputs.version_name }}'
-          releaseBody: 'See the assets to download this version.'
+          tagName: ${{ needs.version-and-changelog.outputs.new_tag }}
+          releaseName: 'VeloDown ${{ needs.version-and-changelog.outputs.new_tag }}'
+          releaseBody: ${{ needs.version-and-changelog.outputs.changelog }}
           releaseDraft: false
           prerelease: ${{ inputs.mark_prerelease }}
-
 
   deploy:
     needs: build-and-release
     runs-on: ubuntu-latest
+    if: needs.version-and-changelog.outputs.new_version != ''
     steps:
       - name: Trigger AUR Publish
         if: ${{ inputs.publish_to_aur == true }}
@@ -121,7 +119,7 @@ jobs:
               workflow_id: 'aur-publish.yml',
               ref: 'main',
               inputs: {
-                version_name: '${{ inputs.version_name }}'
+                version_name: '${{ needs.version-and-changelog.outputs.new_version }}'
               }
             });
 
