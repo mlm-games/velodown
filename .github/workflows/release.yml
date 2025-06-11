@@ -103,7 +103,7 @@ jobs:
 
 
   deploy:
-    needs: create_github_release
+    needs: prepare_release
     runs-on: ubuntu-latest
     steps:
       - name: Trigger AUR Publish
