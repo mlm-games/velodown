@@ -1,11 +1,10 @@
-
 name: 'Release'
 
 on:
   workflow_dispatch:
     inputs:
       mark_prerelease:
-        description: 'Mark as a pre-release? (true/false)'
+        description: 'Mark as a pre-release?'
         required: true
         default: 'false'
         type: boolean
@@ -21,14 +20,14 @@ on:
         type: boolean
 
 jobs:
-  version-and-changelog:
+  create_release_tag:
     runs-on: ubuntu-latest
     permissions:
       contents: write
     outputs:
       new_version: ${{ steps.changelog.outputs.new_version }}
-      new_tag: ${{ steps.changelog.outputs.tag }}
       changelog: ${{ steps.changelog.outputs.clean_changelog }}
+      skipped: ${{ steps.changelog.outputs.skipped }}
 
     steps:
       - name: Checkout repository
@@ -36,30 +35,22 @@ jobs:
         with:
           fetch-depth: 0
 
+    
+    
       - name: Conventional Changelog Action
         id: changelog
-        uses: TriPSs/conventional-changelog-action@v5
+        uses: TriPSs/conventional-changelog-action@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           tag-prefix: 'v'
+        
+          git-push: true
+  
 
-      - name: Update tauri.conf.json version
-        if: steps.changelog.outputs.skipped == 'false'
-        run: |
-          echo "New version from changelog action: ${{ steps.changelog.outputs.new_version }}"
-          sed -i 's/"version": ".*"/"version": "${{ steps.changelog.outputs.new_version }}"/' src-tauri/tauri.conf.json
-          echo "Updated tauri.conf.json"
-
-      - name: Commit and Push Version Changes
-        if: steps.changelog.outputs.skipped == 'false'
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: 'chore(release): Bump version to ${{ steps.changelog.outputs.new_version }}'
-          push_options: '--force --tags'
-
-  build-and-release:
-    needs: version-and-changelog
-    if: needs.version-and-changelog.outputs.new_version != ''
+  build_and_release:
+    needs: create_release_tag
+  
+    if: needs.create_release_tag.outputs.skipped == 'false'
     permissions:
       contents: write
     strategy:
@@ -70,11 +61,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
+      
       - name: Install node
         uses: actions/setup-node@v4
         with:
           node-version: 'lts/*'
+
+    
+      - name: Update tauri.conf.json version
+        run: |
+          echo "Updating tauri.conf.json to version ${{ needs.create_release_tag.outputs.new_version }}"
+          sed -i 's/"version": ".*"/"version": "${{ needs.create_release_tag.outputs.new_version }}"/' src-tauri/tauri.conf.json
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -91,21 +88,22 @@ jobs:
       - name: Build the frontend
         run: npm run build
 
-      - name: Build and Release
+      - name: Build and create GitHub Release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ needs.version-and-changelog.outputs.new_tag }}
-          releaseName: 'VeloDown ${{ needs.version-and-changelog.outputs.new_tag }}'
-          releaseBody: ${{ needs.version-and-changelog.outputs.changelog }}
+        
+          tagName: 'v${{ needs.create_release_tag.outputs.new_version }}'
+          releaseName: 'VeloDown v${{ needs.create_release_tag.outputs.new_version }}'
+          releaseBody: ${{ needs.create_release_tag.outputs.changelog }}
           releaseDraft: false
           prerelease: ${{ inputs.mark_prerelease }}
 
+
   deploy:
-    needs: build-and-release
+    needs: build_and_release
     runs-on: ubuntu-latest
-    if: needs.version-and-changelog.outputs.new_version != ''
     steps:
       - name: Trigger AUR Publish
         if: ${{ inputs.publish_to_aur == true }}
@@ -119,7 +117,7 @@ jobs:
               workflow_id: 'aur-publish.yml',
               ref: 'main',
               inputs: {
-                version_name: '${{ needs.version-and-changelog.outputs.new_version }}'
+                version_name: '${{ needs.create_release_tag.outputs.new_version }}'
               }
             });
 
