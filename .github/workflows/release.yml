@@ -48,12 +48,13 @@ jobs:
           npm version ${{ inputs.version_name }} --no-git-tag-version
           # Update tauri.conf.json using jq
           jq --arg new_version "${{ inputs.version_name }}" '.version = $new_version' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
-
-
+          # Update Cargo.toml version
+          sed -i "s/^version = .*/version = \"${{ inputs.version_name }}\"/" src-tauri/Cargo.toml
+          
       - name: Commit and push version changes
         run: |
-          git config --global user.email "you@example.com"
-          git config --global user.name "mlm-games"
+          git config --global user.email "actions@github.com"
+          git config --global user.name "GitHub Actions"
           git add .
           git commit -m "chore(release): Bump version to ${{ inputs.version_name }}"
           git push
@@ -68,7 +69,7 @@ jobs:
         platform: [macos-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.platform }}
     steps:
-      - name: Checkout repository at new tag
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install node
@@ -79,12 +80,12 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Linux dependencies (with version pinning)
+      - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
+          
       - name: Install frontend dependencies
         run: npm install
 
@@ -98,17 +99,23 @@ jobs:
         with:
           tagName: 'v${{ inputs.version_name }}'
           releaseName: 'VeloDown v${{ inputs.version_name }}'
-          releaseBody: 'New release of VeloDown. Download the installer for your OS below.'
+          releaseBody: |
+            ${{ needs.prepare_release.outputs.release_notes }}
+            
+            ---
+            Download the installer for your OS below.
           releaseDraft: false
           prerelease: ${{ inputs.mark_prerelease }}
-          # args: '-- --no-dev-path --no-debug'
 
   deploy:
     needs: build_tauri
     runs-on: ubuntu-latest
+    if: ${{ inputs.publish_to_aur == true && inputs.mark_prerelease == false }}
     steps:
+      - name: Wait for release assets
+        run: sleep 30  # Give time for assets to be uploaded
+        
       - name: Trigger AUR Publish
-        if: ${{ inputs.publish_to_aur == true }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -116,13 +123,10 @@ jobs:
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'aur-publish.yml',
+              workflow_id: 'aur-publish.yml', 
               ref: 'main',
               inputs: {
-                version_name: '${{ inputs.version_name }}'
+                version_name: '${{ inputs.version_name }}',
+                increment_pkgrel: 'false'
               }
             });
-
-      # - name: Trigger Snapcraft Publish
-      #   if: ${{ inputs.publish_to_snap == true }}
-        # run: echo "Create the yml file first."
