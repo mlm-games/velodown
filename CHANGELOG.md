@@ -1,3 +1,9 @@
+## v0.1.13
+
+- git config name by @mlm-studios
+- Do not associate tag with commit by @mlm-studios
+
+
 ## v0.1.11
 
 - try to add changelog back by @mlm-studios
