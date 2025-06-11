@@ -1,9 +1,11 @@
-
 name: 'Release'
 
 on:
   workflow_dispatch:
     inputs:
+      version_name:
+        description: 'Release version (e.g., 0.2.0). This must be a new version.'
+        required: true
       mark_prerelease:
         description: 'Mark as a pre-release?'
         required: true
@@ -14,20 +16,15 @@ on:
         required: false
         default: 'true'
         type: boolean
-      publish_to_snap:
-        description: 'Publish to Snapcraft?'
-        required: false
-        default: 'false'
-        type: boolean
+
 jobs:
-  generate_version_and_changelog:
+  prepare_release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
     outputs:
-      new_version: ${{ steps.changelog.outputs.new_version }}
-      changelog: ${{ steps.changelog.outputs.clean_changelog }}
-      skipped: ${{ steps.changelog.outputs.skipped }}
+      version: ${{ inputs.version_name }}
+      release_notes: ${{ steps.generate_notes.outputs.release-notes }}
 
     steps:
       - name: Checkout repository
@@ -35,19 +32,30 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Conventional Changelog Action
-        id: changelog
-        uses: TriPSs/conventional-changelog-action@v6
+      - name: Generate Release Notes
+        id: generate_notes
+        uses: mlm-games/release-notes-generator@v1.1.0 # Using the action you provided
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          tag-prefix: 'v'
-          skip-commit: 'true'
-          skip-tag: 'true'
-          skip-on-empty: 'false'
+          version: ${{ inputs.version_name }}
+          changelog-path: 'CHANGELOG.md'
+          auto-commit: 'false' 
+          exclude-patterns: 'chore(release),Merge pull request'
 
-  build_and_release:
-    needs: generate_version_and_changelog
-    if: needs.generate_version_and_changelog.outputs.skipped == 'false'
+      - name: Update version files
+        run: |
+          echo "Bumping versions to ${{ inputs.version_name }}"
+          npm version ${{ inputs.version_name }} --no-git-tag-version
+          sed -i'' 's/"version": ".*"/"version": "${{ inputs.version_name }}"/' src-tauri/tauri.conf.json
+      
+      - name: Commit, Tag, and Push
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'chore(release): Bump version to ${{ inputs.version_name }}'
+          tagging_message: 'v${{ inputs.version_name }}'
+          push_options: '--follow-tags'
+
+  build_tauri:
+    needs: prepare_release
     permissions:
       contents: write
     strategy:
@@ -56,18 +64,15 @@ jobs:
         platform: [macos-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.platform }}
     steps:
-      - name: Checkout repository
+      - name: Checkout repository at new tag
         uses: actions/checkout@v4
+        with:
+          ref: 'v${{ needs.prepare_release.outputs.version }}'
 
       - name: Install node
         uses: actions/setup-node@v4
         with:
           node-version: 'lts/*'
-
-      - name: Update version files
-        run: |
-          npm version ${{ needs.generate_version_and_changelog.outputs.new_version }} --no-git-tag-version
-          sed -i'' 's/"version": ".*"/"version": "${{ needs.generate_version_and_changelog.outputs.new_version }}"/' src-tauri/tauri.conf.json
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -84,22 +89,36 @@ jobs:
       - name: Build the frontend
         run: npm run build
 
-      - name: Build and Release with Tauri Action
+      - name: Build with Tauri Action
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: 'v${{ needs.generate_version_and_changelog.outputs.new_version }}'
-          releaseName: 'VeloDown v${{ needs.generate_version_and_changelog.outputs.new_version }}'
-          releaseBody: ${{ needs.generate_version_and_changelog.outputs.changelog }}
-          releaseDraft: false
-          prerelease: ${{ inputs.mark_prerelease }}
-          # This tells tauri-action to commit the changed package.json/tauri.conf.json
           args: '--no-dev-path --no-debug'
 
+  create_github_release:
+    needs: [prepare_release, build_tauri]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: tauri-artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: 'v${{ needs.prepare_release.outputs.version }}'
+          name: 'VeloDown v${{ needs.prepare_release.outputs.version }}'
+          # use the generated changelog from the first job as the release body
+          body: ${{ needs.prepare_release.outputs.release_notes }}
+          prerelease: ${{ inputs.mark_prerelease }}
+          files: tauri-artifacts/*/*
 
   deploy:
-    needs: build_and_release
+    needs: create_github_release
     runs-on: ubuntu-latest
     steps:
       - name: Trigger AUR Publish
@@ -114,7 +133,7 @@ jobs:
               workflow_id: 'aur-publish.yml',
               ref: 'main',
               inputs: {
-                version_name: '${{ needs.build_and_release.outputs.appVersion }}'
+                version_name: '${{ needs.prepare_release.outputs.version }}'
               }
             });
 
