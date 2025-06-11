@@ -270,7 +270,7 @@ async fn add_download(
     
     // Start download if auto-start is enabled
     if state.persistent.lock().await.settings.auto_start {
-        start_download_task(id, state.clone(), app_handle.clone()).await?;
+        start_download_task(id, app_handle.clone()).await?;
     }
     
     Ok(new_task)
@@ -302,10 +302,9 @@ async fn pause_download(
 #[tauri::command]
 async fn resume_download(
     id: String,
-    state: State<'_, AppState>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
-    start_download_task(id, state, app_handle).await
+    start_download_task(id, app_handle).await
 }
 
 #[tauri::command]
@@ -398,10 +397,10 @@ async fn open_folder(path: String) -> Result<(), String> {
 
 async fn start_download_task(
     id: String,
-    state: State<'_, AppState>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
     let task_info = {
+        let state: State<AppState> = app_handle.state();
         let mut state_guard = state.persistent.lock().await;
         let task = state_guard.downloads.iter_mut()
             .find(|t| t.id == id)
@@ -413,9 +412,8 @@ async fn start_download_task(
         (task.url.clone(), task.save_path.clone(), task.file_name.clone(), task.downloaded_size)
     };
     
-    save_state(&state, &app_handle).await.map_err(|e| e.to_string())?;
+    save_state(&app_handle.state(), &app_handle).await.map_err(|e| e.to_string())?;
     
-    let state_clone = state.clone();
     let app_handle_clone = app_handle.clone();
     let id_clone = id.clone();
     
@@ -426,22 +424,23 @@ async fn start_download_task(
             task_info.1,
             task_info.2,
             task_info.3,
-            state_clone.clone(),
             app_handle_clone.clone(),
         ).await {
-            let mut state_guard = state_clone.persistent.lock().await;
+            let state: State<AppState> = app_handle_clone.state();
+            let mut state_guard = state.persistent.lock().await;
             if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id_clone) {
                 task.status = DownloadStatus::Failed;
                 task.error_message = Some(e.to_string());
                 app_handle_clone.emit("task_updated", &*task).unwrap();
             }
-            let _ = save_state(&state_clone, &app_handle_clone).await;
+            let _ = save_state(&state, &app_handle_clone).await;
         }
     });
     
-    state.download_handles.lock().await.insert(id, handle);
+    app_handle.state::<AppState>().download_handles.lock().await.insert(id, handle);
     Ok(())
 }
+
 
 async fn download_file(
     id: String,
@@ -449,7 +448,6 @@ async fn download_file(
     save_path: String,
     file_name: String,
     resume_from: u64,
-    state: State<'_, AppState>,
     app_handle: AppHandle,
 ) -> anyhow::Result<()> {
     let client = reqwest::Client::builder()
@@ -475,6 +473,8 @@ async fn download_file(
     };
     
     {
+        // Get state from the handle when needed.
+        let state: State<AppState> = app_handle.state();
         let mut state_guard = state.persistent.lock().await;
         if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id) {
             task.total_size = total_size;
@@ -523,6 +523,8 @@ async fn download_file(
             };
             
             {
+                // Get state from the handle when needed.
+                let state: State<AppState> = app_handle.state();
                 let mut state_guard = state.persistent.lock().await;
                 if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id) {
                     task.downloaded_size = downloaded;
@@ -539,6 +541,7 @@ async fn download_file(
     }
     
     {
+        let state: State<AppState> = app_handle.state();
         let mut state_guard = state.persistent.lock().await;
         if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id) {
             task.status = DownloadStatus::Verifying;
@@ -552,7 +555,9 @@ async fn download_file(
     }
     
     {
+        let state: State<AppState> = app_handle.state();
         let mut state_guard = state.persistent.lock().await;
+        let show_notifications = state_guard.settings.show_notifications;
         if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id) {
             task.status = DownloadStatus::Completed;
             task.progress = 100.0;
@@ -561,7 +566,7 @@ async fn download_file(
             task.completed_at = Some(Local::now());
             app_handle.emit("task_updated", &*task).unwrap();
             
-            if state_guard.settings.show_notifications {
+            if show_notifications {
                 let _ = app_handle.notification()
                     .builder()
                     .title("Download Complete")
@@ -571,7 +576,7 @@ async fn download_file(
         }
     }
     
-    let _ = save_state(&state, &app_handle).await;
+    let _ = save_state(&app_handle.state(), &app_handle).await;
     Ok(())
 }
 
