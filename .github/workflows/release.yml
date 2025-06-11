@@ -103,7 +103,7 @@ jobs:
 
 
   deploy:
-    needs: prepare_release
+    needs: build_tauri
     runs-on: ubuntu-latest
     steps:
       - name: Trigger AUR Publish
