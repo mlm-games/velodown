@@ -1,3 +1,9 @@
+## v0.1.7
+
+- use properly needs by @mlm-studios
+- use tauri's release creation (it doesnt upload artifacts by @mlm-studios
+
+
 ## v0.1.6
 
 - remove args and test by @mlm-studios
