@@ -1,0 +1,54 @@
+name: 'Publish to AUR'
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'App version to publish (e.g., 0.1.2)'
+        required: true
+
+jobs:
+  publish-aur:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download AppImage from GitHub Release
+        run: |
+          wget "https://github.com/${{ github.repository }}/releases/download/v${{ inputs.version_name }}/VeloDown_${{ inputs.version_name }}_amd64.AppImage" -O velodown.AppImage
+          chmod +x velodown.AppImage
+
+      - name: Calculate SHA256 checksum
+        id: checksum
+        run: echo "sha256=$(sha256sum velodown.AppImage | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+
+      - name: Publish to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@master
+        with:
+          pkgname: velodown-bin
+          
+          pkgbuild: |
+            # Maintainer: Your Name <your.email@example.com>
+            pkgname=velodown-bin
+            pkgver=${{ inputs.version_name }}
+            pkgrel=1
+            pkgdesc="A powerful download manager built with Tauri."
+            arch=('x86_64')
+            url="https://github.com/${{ github.repository }}"
+            license=('MIT')
+            depends=('gtk3' 'webkit2gtk' 'appmenu-gtk-module')
+            provides=('velodown')
+            conflicts=('velodown')
+            source_x86_64=("${pkgname}-${pkgver}.AppImage::${url}/releases/download/v${pkgver}/${pkgname%'-bin'}_${pkgver}_amd64.AppImage")
+            sha256sums_x86_64=('${{ steps.checksum.outputs.sha256 }}')
+
+            package() {
+              install -Dm755 "${srcdir}/${pkgname}-${pkgver}.AppImage" "${pkgdir}/usr/bin/velodown"
+              install -Dm644 "${srcdir}/usr/share/icons/hicolor/128x128/apps/com.velodown.dev.png" "${pkgdir}/usr/share/pixmaps/velodown.png"
+              install -Dm644 "${srcdir}/usr/share/applications/com.velodown.dev.desktop" "${pkgdir}/usr/share/applications/velodown.desktop"
+            }
+
+          commit_username: ${{ github.actor }}
+          commit_email: ${{ github.actor }}@users.noreply.github.com
+
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          
+          commit_message: "Update to v${{ inputs.version_name }}"
