@@ -70,8 +70,6 @@ jobs:
     steps:
       - name: Checkout repository at new tag
         uses: actions/checkout@v4
-        with:
-          ref: 'v${{ needs.prepare_release.outputs.version }}'
 
       - name: Install node
         uses: actions/setup-node@v4
