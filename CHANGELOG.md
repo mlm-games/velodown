@@ -1,3 +1,10 @@
+## v0.1.5
+
+- use mine only (as am more familiar) and **** macos by @mlm-studios
+- Update release.yml to not skip on empty by @ragebreaker
+- try diff by @mlm-studios
+
+
 ## [0.1.3](https://github.com/mlm-games/velodown/compare/v0.1.0...v0.1.3) (2025-06-11)
 
 
