@@ -93,8 +93,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: '--no-dev-path --no-debug'
+        # with:
+          # args: '--no-dev-path --no-debug'
 
   create_github_release:
     needs: [prepare_release, build_tauri]
