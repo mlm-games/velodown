@@ -1,3 +1,8 @@
+## v0.1.11
+
+- try to add changelog back by @mlm-studios
+
+
 ## v0.1.9
 
 - try this now by @mlm-studios
