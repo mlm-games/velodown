@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=VeloDown
+Comment=A fast and simple download manager built with Tauri
+GenericName=Download Manager
+Exec=velodown %U
+Icon=velodown
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;Qt;
+MimeType=x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/magnet;
+StartupNotify=true
+Keywords=download;manager;accelerator
