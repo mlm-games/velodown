@@ -14,6 +14,8 @@ use reqwest;
 use futures::StreamExt;
 use url::Url;
 use chrono::{DateTime, Local};
+use tauri_plugin_dialog::DialogExt;
+use tokio::sync::oneshot;
 use tauri_plugin_notification::NotificationExt;
 use tokio::io::AsyncWriteExt;
 
@@ -212,15 +214,26 @@ async fn update_settings(
 
 #[tauri::command]
 async fn choose_download_folder(app_handle: AppHandle) -> Result<String, String> {
-    use tauri::api::dialog::blocking::FileDialogBuilder;
-    
-    let folder = FileDialogBuilder::new()
+    // Create a one-shot channel to bridge the callback-based API with async/await.
+    let (tx, rx) = oneshot::channel();
+
+    app_handle
+        .dialog()
+        .file()
         .set_title("Choose Download Folder")
-        .pick_folder();
-        
-    match folder {
-        Some(path) => Ok(path.to_string_lossy().to_string()),
-        None => Err("No folder selected".to_string()),
+        .pick_folder(move |folder_path| {
+            // Send the result through the channel.
+            // The `_` ignores a potential error if the receiver was dropped before the callback runs.
+            let _ = tx.send(folder_path);
+        });
+
+    // Wait for the channel to receive a value from the callback.
+    match rx.await {
+        // `rx.await` returns a Result, in case the sender is dropped.
+        // The inner value is the `Option<PathBuf>` from the dialog.
+        Ok(Some(path)) => Ok(path.to_string()),
+        Ok(None) => Err("No folder selected".to_string()),
+        Err(_) => Err("Failed to receive folder selection from dialog.".to_string()),
     }
 }
 
