@@ -223,11 +223,27 @@ async fn cancel_download(id: String, state: State<'_, AppState>, app_handle: App
     Ok(())
 }
 #[tauri::command]
-async fn open_file(path: String) -> Result<(), String> {
-    let path_buf = PathBuf::from(&path); if !path_buf.exists() { return Err("File not found".to_string()); }
-    #[cfg(target_os = "windows")] { Command::new("explorer").arg(&path).spawn().map_err(|e| e.to_string())?; }
-    #[cfg(target_os = "macos")] { Command::new("open").arg(&path).spawn().map_err(|e| e.to_string())?; }
-    #[cfg(target_os = "linux")] { Command::new("xdg-open").arg(&path).spawn().map_err(|e| e.to_string())?; }
+async fn open_file(save_path: String, file_name: String) -> Result<(), String> {
+    // Let Rust's PathBuf handle joining paths correctly for any OS
+    let full_path = PathBuf::from(&save_path).join(&file_name);
+
+    if !full_path.exists() {
+        return Err("File not found".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer").arg(&full_path).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(&full_path).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open").arg(&full_path).spawn().map_err(|e| e.to_string())?;
+    }
+    
     Ok(())
 }
 #[tauri::command]
