@@ -1,23 +1,31 @@
-// Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
-use tauri::{AppHandle, Manager, State, Window};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tauri::{AppHandle, Manager, State};
 use tokio::time::{sleep, Duration};
 use tauri::Emitter;
+use std::process::Command;
+use reqwest;
+use futures::StreamExt;
+use std::io::Write;
+use url::Url;
+use chrono::{DateTime, Local};
 
-// --- 1. Enhanced Data Structures ---
+// --- Data Structures ---
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
 enum DownloadStatus {
     Queued,
     Downloading,
     Paused,
     Completed,
-    Error,
+    Failed,
+    Verifying,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -25,28 +33,48 @@ struct DownloadTask {
     id: String,
     url: String,
     status: DownloadStatus,
-    progress: u8,
+    progress: f64,
     file_name: String,
     save_path: String,
+    total_size: u64,
+    downloaded_size: u64,
+    speed: u64,
+    time_remaining: Option<u64>,
+    resume_capability: bool,
+    error_message: Option<String>,
+    created_at: DateTime<Local>,
+    completed_at: Option<DateTime<Local>>,
+    file_type: String,
+    connections: u8,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct AppSettings {
     download_folder: String,
     max_concurrent_downloads: u32,
+    max_connections_per_download: u8,
+    auto_start: bool,
+    show_notifications: bool,
+    min_split_size: u64, // Minimum size in bytes to split downloads
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
+        let download_folder = dirs::download_dir()
+            .unwrap_or_else(|| PathBuf::from("~/Downloads"))
+            .to_string_lossy()
+            .to_string();
+            
         Self {
-            // Use a placeholder that can be changed
-            download_folder: "~/Downloads".to_string(),
+            download_folder,
             max_concurrent_downloads: 4,
+            max_connections_per_download: 8,
+            auto_start: true,
+            show_notifications: true,
+            min_split_size: 10 * 1024 * 1024, // 10MB
         }
     }
 }
-
-// --- 2. Centralized, Persistent State ---
 
 #[derive(Debug, Serialize, Deserialize)]
 struct PersistentState {
@@ -63,162 +91,448 @@ impl Default for PersistentState {
     }
 }
 
-struct AppState(Mutex<PersistentState>); 
+struct AppState {
+    persistent: Arc<Mutex<PersistentState>>,
+    download_handles: Arc<Mutex<std::collections::HashMap<String, tokio::task::JoinHandle<()>>>>,
+}
 
-// --- 3. Helper Functions for Persistence ---
+// --- Helper Functions ---
 
-// Gets the path to our state file (e.g., /home/user/.config/velodown/state.json)
 fn get_state_path(app_handle: &AppHandle) -> anyhow::Result<PathBuf> {
     let path = app_handle.path().app_data_dir()?.join("state.json");
-    // Ensure parent directory exists
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     Ok(path)
 }
 
-// Saves the entire application state to the JSON file.
-fn save_state(state: &State<AppState>, app_handle: &AppHandle) -> anyhow::Result<()> {
+async fn save_state(state: &State<'_, AppState>, app_handle: &AppHandle) -> anyhow::Result<()> {
     let path = get_state_path(app_handle)?;
-    let state_guard = state.0.lock().unwrap();
+    let state_guard = state.persistent.lock().await;
     fs::write(path, serde_json::to_string_pretty(&*state_guard)?)?;
-    log::info!("Application state saved.");
     Ok(())
 }
 
-// --- 4. Refactored Tauri Commands ---
+fn validate_url(url: &str) -> Result<String, String> {
+    match Url::parse(url) {
+        Ok(parsed_url) => {
+            if parsed_url.scheme() == "http" || parsed_url.scheme() == "https" {
+                Ok(url.to_string())
+            } else {
+                Err("Only HTTP and HTTPS URLs are supported".to_string())
+            }
+        }
+        Err(_) => Err("Invalid URL format".to_string()),
+    }
+}
+
+fn extract_filename_from_url(url: &str) -> String {
+    if let Ok(parsed_url) = Url::parse(url) {
+        if let Some(segments) = parsed_url.path_segments() {
+            if let Some(last_segment) = segments.last() {
+                if !last_segment.is_empty() && last_segment.contains('.') {
+                    return last_segment.to_string();
+                }
+            }
+        }
+    }
+    format!("download_{}.bin", chrono::Local::now().timestamp())
+}
+
+fn get_file_type(filename: &str) -> String {
+    let extension = filename.split('.').last().unwrap_or("").to_lowercase();
+    match extension.as_str() {
+        "mp4" | "avi" | "mkv" | "mov" | "wmv" => "Video",
+        "mp3" | "wav" | "flac" | "aac" | "ogg" => "Audio",
+        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "svg" => "Image",
+        "zip" | "rar" | "7z" | "tar" | "gz" => "Archive",
+        "exe" | "msi" | "dmg" | "deb" | "rpm" => "Executable",
+        "pdf" | "doc" | "docx" | "txt" | "odt" => "Document",
+        _ => "Other",
+    }.to_string()
+}
+
+// --- Tauri Commands ---
 
 #[tauri::command]
-fn get_all_downloads(state: State<AppState>) -> Result<Vec<DownloadTask>, String> {
-    Ok(state.0.lock().unwrap().downloads.clone())
+async fn get_all_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadTask>, String> {
+    Ok(state.persistent.lock().await.downloads.clone())
 }
 
 #[tauri::command]
-fn get_settings(state: State<AppState>) -> Result<AppSettings, String> {
-    Ok(state.0.lock().unwrap().settings.clone())
+async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
+    Ok(state.persistent.lock().await.settings.clone())
 }
 
 #[tauri::command]
-fn update_settings(
+async fn update_settings(
     settings: AppSettings,
-    state: State<AppState>,
+    state: State<'_, AppState>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
-    state.0.lock().unwrap().settings = settings;
-    save_state(&state, &app_handle).map_err(|e| e.to_string())?;
+    state.persistent.lock().await.settings = settings;
+    save_state(&state, &app_handle).await.map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+async fn choose_download_folder(app_handle: AppHandle) -> Result<String, String> {
+    use tauri::api::dialog::blocking::FileDialogBuilder;
+    
+    let folder = FileDialogBuilder::new()
+        .set_title("Choose Download Folder")
+        .pick_folder();
+        
+    match folder {
+        Some(path) => Ok(path.to_string_lossy().to_string()),
+        None => Err("No folder selected".to_string()),
+    }
 }
 
 #[tauri::command]
 async fn add_download(
     url: String,
+    custom_path: Option<String>,
     state: State<'_, AppState>,
-    window: Window, // We still use this for the initial emit
     app_handle: AppHandle,
-) -> Result<(), String> {
-    log::info!("Received add_download command for URL: {}", url);
-
-    let id = format!("task-{}", rand::random::<u32>());
-    let file_name = url.split('/').last().unwrap_or("downloaded_file").to_string();
-    let save_path = state.0.lock().unwrap().settings.download_folder.clone();
+) -> Result<DownloadTask, String> {
+    // Validate URL
+    let validated_url = validate_url(&url)?;
+    
+    let id = format!("task-{}", uuid::Uuid::new_v4());
+    let file_name = extract_filename_from_url(&validated_url);
+    let file_type = get_file_type(&file_name);
+    
+    let save_path = custom_path.unwrap_or_else(|| {
+        state.persistent.blocking_lock().settings.download_folder.clone()
+    });
 
     let new_task = DownloadTask {
         id: id.clone(),
-        url,
+        url: validated_url.clone(),
         status: DownloadStatus::Queued,
-        progress: 0,
+        progress: 0.0,
         file_name,
         save_path,
+        total_size: 0,
+        downloaded_size: 0,
+        speed: 0,
+        time_remaining: None,
+        resume_capability: false,
+        error_message: None,
+        created_at: Local::now(),
+        completed_at: None,
+        file_type,
+        connections: state.persistent.blocking_lock().settings.max_connections_per_download,
     };
 
-    state.0.lock().unwrap().downloads.push(new_task.clone());
-    save_state(&state, &app_handle).map_err(|e| e.to_string())?;
-    window.emit("task_updated", &new_task).unwrap();
-    log::info!("Task {} queued and UI notified.", id);
+    // Add to state
+    state.persistent.lock().await.downloads.push(new_task.clone());
+    save_state(&state, &app_handle).await.map_err(|e| e.to_string())?;
+    
+    // Emit update
+    app_handle.emit("task_updated", &new_task).unwrap();
+    
+    // Start download if auto-start is enabled
+    if state.persistent.lock().await.settings.auto_start {
+        start_download_task(id, state.clone(), app_handle.clone()).await?;
+    }
+    
+    Ok(new_task)
+}
 
-
-    let app_handle_clone = app_handle.clone();
-    let id_clone = id.clone();
-
-
-    // SIMULATE THE DOWNLOAD IN THE BACKGROUND
-    tokio::spawn(async move {
-        // Inside the background thread, get new handles to state and the window
-        // using the 'static AppHandle. This is the key to solving the lifetime error.
-        let state = app_handle_clone.state::<AppState>();
-        let window = app_handle_clone.get_webview_window("main").expect("Failed to get main window");
-
-        // Now, the rest of the logic works perfectly with these new, valid handles.
-
-        // Change status to Downloading
-        {
-            let mut state_guard = state.0.lock().unwrap();
-            if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id_clone) {
-                task.status = DownloadStatus::Downloading;
-                window.emit("task_updated", &*task).unwrap();
-                log::info!("Task {} status changed to Downloading.", id_clone);
-            }
-        }
-        save_state(&state, &app_handle_clone).unwrap_or_else(|e| log::error!("Failed to save state: {}", e));
-
-        // Simulate progress
-        for i in 1..=100 {
-            sleep(Duration::from_millis(50)).await;
-            window.emit("download_progress", serde_json::json!({ "id": id_clone, "progress": i })).unwrap();
-        }
-
-        // Finalize and mark as completed
-        {
-            let mut state_guard = state.0.lock().unwrap();
-            if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id_clone) {
-                task.status = DownloadStatus::Completed;
-                task.progress = 100;
-                window.emit("task_updated", &*task).unwrap();
-                log::info!("Task {} status changed to Completed.", id_clone);
-            }
-        }
-        save_state(&state, &app_handle_clone).unwrap_or_else(|e| log::error!("Failed to save state: {}", e));
-    });
-
+#[tauri::command]
+async fn pause_download(
+    id: String,
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    // Cancel the download handle if it exists
+    if let Some(handle) = state.download_handles.lock().await.remove(&id) {
+        handle.abort();
+    }
+    
+    // Update status
+    let mut state_guard = state.persistent.lock().await;
+    if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id) {
+        task.status = DownloadStatus::Paused;
+        task.speed = 0;
+        app_handle.emit("task_updated", &*task).unwrap();
+    }
+    drop(state_guard);
+    
+    save_state(&state, &app_handle).await.map_err(|e| e.to_string())?;
     Ok(())
 }
 
+#[tauri::command]
+async fn resume_download(
+    id: String,
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    start_download_task(id, state, app_handle).await
+}
 
+#[tauri::command]
+async fn cancel_download(
+    id: String,
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    // Cancel the download handle if it exists
+    if let Some(handle) = state.download_handles.lock().await.remove(&id) {
+        handle.abort();
+    }
+    
+    // Remove from state
+    state.persistent.lock().await.downloads.retain(|t| t.id != id);
+    save_state(&state, &app_handle).await.map_err(|e| e.to_string())?;
+    
+    app_handle.emit("download_removed", &id).unwrap();
+    Ok(())
+}
 
+#[tauri::command]
+async fn open_file(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    
+    Ok(())
+}
 
-// --- 5. Main Function with Setup Hook for Loading State ---
+#[tauri::command]
+async fn open_folder(path: String) -> Result<(), String> {
+    let folder = PathBuf::from(&path).parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or(path);
+        
+    open_file(folder).await
+}
+
+async fn start_download_task(
+    id: String,
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    let task_info = {
+        let mut state_guard = state.persistent.lock().await;
+        let task = state_guard.downloads.iter_mut()
+            .find(|t| t.id == id)
+            .ok_or("Task not found")?;
+        
+        task.status = DownloadStatus::Downloading;
+        app_handle.emit("task_updated", &*task).unwrap();
+        
+        (task.url.clone(), task.save_path.clone(), task.file_name.clone())
+    };
+    
+    save_state(&state, &app_handle).await.map_err(|e| e.to_string())?;
+    
+    // Spawn download task
+    let state_clone = state.clone();
+    let app_handle_clone = app_handle.clone();
+    let id_clone = id.clone();
+    
+    let handle = tokio::spawn(async move {
+        if let Err(e) = download_file(
+            id_clone.clone(),
+            task_info.0,
+            task_info.1,
+            task_info.2,
+            state_clone.clone(),
+            app_handle_clone.clone(),
+        ).await {
+            // Update task with error
+            let mut state_guard = state_clone.persistent.lock().await;
+            if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id_clone) {
+                task.status = DownloadStatus::Failed;
+                task.error_message = Some(e.to_string());
+                app_handle_clone.emit("task_updated", &*task).unwrap();
+            }
+            let _ = save_state(&state_clone, &app_handle_clone).await;
+        }
+    });
+    
+    state.download_handles.lock().await.insert(id, handle);
+    Ok(())
+}
+
+async fn download_file(
+    id: String,
+    url: String,
+    save_path: String,
+    file_name: String,
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+) -> anyhow::Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+        
+    let response = client.get(&url).send().await?;
+    let total_size = response.content_length().unwrap_or(0);
+    
+    // Update task with total size
+    {
+        let mut state_guard = state.persistent.lock().await;
+        if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id) {
+            task.total_size = total_size;
+            task.resume_capability = response.headers()
+                .get("accept-ranges")
+                .map(|v| v == "bytes")
+                .unwrap_or(false);
+            app_handle.emit("task_updated", &*task).unwrap();
+        }
+    }
+    
+    let file_path = PathBuf::from(&save_path).join(&file_name);
+    let mut file = tokio::fs::File::create(&file_path).await?;
+    let mut stream = response.bytes_stream();
+    let mut downloaded = 0u64;
+    let mut last_update = std::time::Instant::now();
+    let mut last_downloaded = 0u64;
+    
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        file.write_all(&chunk).await?;
+        downloaded += chunk.len() as u64;
+        
+        // Update progress every 100ms
+        if last_update.elapsed() > Duration::from_millis(100) {
+            let speed = ((downloaded - last_downloaded) as f64 / last_update.elapsed().as_secs_f64()) as u64;
+            let time_remaining = if speed > 0 {
+                Some((total_size - downloaded) / speed)
+            } else {
+                None
+            };
+            
+            let progress = if total_size > 0 {
+                (downloaded as f64 / total_size as f64) * 100.0
+            } else {
+                0.0
+            };
+            
+            // Update task
+            {
+                let mut state_guard = state.persistent.lock().await;
+                if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id) {
+                    task.downloaded_size = downloaded;
+                    task.progress = progress;
+                    task.speed = speed;
+                    task.time_remaining = time_remaining;
+                    app_handle.emit("task_updated", &*task).unwrap();
+                }
+            }
+            
+            last_update = std::time::Instant::now();
+            last_downloaded = downloaded;
+        }
+    }
+    
+    // Mark as completed
+    {
+        let mut state_guard = state.persistent.lock().await;
+        if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id) {
+            task.status = DownloadStatus::Completed;
+            task.progress = 100.0;
+            task.downloaded_size = total_size;
+            task.speed = 0;
+            task.completed_at = Some(Local::now());
+            app_handle.emit("task_updated", &*task).unwrap();
+            
+            // Show notification if enabled
+            if state_guard.settings.show_notifications {
+                let _ = app_handle.notification()
+                    .builder()
+                    .title("Download Complete")
+                    .body(&format!("{} has finished downloading", task.file_name))
+                    .show();
+            }
+        }
+    }
+    
+    let _ = save_state(&state, &app_handle).await;
+    Ok(())
+}
+
+// Command line support
+#[tauri::command]
+async fn handle_cli_args(args: Vec<String>) -> Result<(), String> {
+    // Parse command line arguments for URLs
+    for arg in args.iter().skip(1) {
+        if arg.starts_with("http://") || arg.starts_with("https://") {
+            // URL detected, will be handled by the frontend
+            return Ok(());
+        }
+    }
+    Ok(())
+}
 
 fn main() {
-    env_logger::init(); // Initialize the logger
+    env_logger::init();
 
     tauri::Builder::default()
         .setup(|app| {
             let app_handle = app.handle().clone();
-            let state_path = get_state_path(&app_handle)
-                .expect("Failed to get state path");
+            let state_path = get_state_path(&app_handle)?;
             
             let initial_state = if state_path.exists() {
-                log::info!("Loading state from {}", state_path.display());
-                let content = fs::read_to_string(state_path)
-                    .expect("Failed to read state file");
-                serde_json::from_str(&content)
-                    .unwrap_or_else(|e| {
-                        log::error!("Failed to parse state file, using default: {}", e);
-                        PersistentState::default()
-                    })
+                let content = fs::read_to_string(state_path)?;
+                serde_json::from_str(&content).unwrap_or_default()
             } else {
-                log::info!("No state file found, using default state.");
                 PersistentState::default()
             };
 
-            app.manage(AppState(Mutex::new(initial_state)));
+            app.manage(AppState {
+                persistent: Arc::new(Mutex::new(initial_state)),
+                download_handles: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            });
+            
+            // Handle command line arguments
+            if let Some(args) = app.env().args {
+                for arg in args.iter().skip(1) {
+                    if arg.starts_with("http://") || arg.starts_with("https://") {
+                        app.emit("cli-url", arg).unwrap();
+                    }
+                }
+            }
+            
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             add_download,
             get_all_downloads,
             get_settings,
-            update_settings
+            update_settings,
+            pause_download,
+            resume_download,
+            cancel_download,
+            open_file,
+            open_folder,
+            choose_download_folder,
+            handle_cli_args,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

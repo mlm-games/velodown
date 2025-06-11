@@ -6,113 +6,65 @@
   interface Download {
     id: string;
     url: string;
-    status: 'Queued' | 'Downloading' | 'Paused' | 'Completed' | 'Error';
+    status: 'queued' | 'downloading' | 'paused' | 'completed' | 'failed' | 'verifying';
     progress: number;
     file_name: string;
     save_path: string;
+    total_size: number;
+    downloaded_size: number;
+    speed: number;
+    time_remaining: number | null;
+    resume_capability: boolean;
+    error_message: string | null;
+    created_at: string;
+    completed_at: string | null;
+    file_type: string;
   }
 
   let downloads: Download[] = [];
-  let unlistenProgress: Function;
+  let filter: 'all' | 'active' | 'completed' = 'all';
+  let searchQuery = '';
   let unlistenTaskUpdated: Function;
+  let unlistenDownloadRemoved: Function;
+
+  $: filteredDownloads = downloads.filter(d => {
+    const matchesFilter = 
+      filter === 'all' ||
+      (filter === 'active' && ['queued', 'downloading', 'paused'].includes(d.status)) ||
+      (filter === 'completed' && d.status === 'completed');
+    
+    const matchesSearch = 
+      searchQuery === '' ||
+      d.file_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      d.url.toLowerCase().includes(searchQuery.toLowerCase());
+    
+    return matchesFilter && matchesSearch;
+  });
 
   onMount(async () => {
-    try {
-      downloads = await invoke<Download[]>('get_all_downloads');
-    } catch (e) {
-      console.error("Failed to get initial downloads:", e);
-    }
+    await loadDownloads();
 
     unlistenTaskUpdated = await listen('task_updated', (event: any) => {
       const updatedTask: Download = event.payload;
       const index = downloads.findIndex(d => d.id === updatedTask.id);
       if (index !== -1) {
-        // If the task exists, update it
         downloads[index] = updatedTask;
       } else {
-        // If it's a new task, add it to the top of the list
         downloads = [updatedTask, ...downloads];
       }
     });
 
-    unlistenProgress = await listen('download_progress', (event: any) => {
-      const { id, progress } = event.payload;
-      const index = downloads.findIndex(d => d.id === id);
-      if (index !== -1) {
-        downloads[index].progress = progress;
-        // This is a Svelte trick to force the UI to update the array
-        downloads = [...downloads];
-      }
+    unlistenDownloadRemoved = await listen('download_removed', (event: any) => {
+      const id = event.payload;
+      downloads = downloads.filter(d => d.id !== id);
     });
   });
 
   onDestroy(() => {
-    // Always clean up listeners
-    if (unlistenProgress) unlistenProgress();
     if (unlistenTaskUpdated) unlistenTaskUpdated();
+    if (unlistenDownloadRemoved) unlistenDownloadRemoved();
   });
-</script>
 
-<section>
-  <h2>Active Downloads</h2>
-  {#if downloads.length === 0}
-    <p>The queue is empty. Add a new download to get started.</p>
-  {:else}
-    <div class="list">
-      {#each downloads as download (download.id)}
-        <div class="download-item" class:completed={download.status === 'Completed'}>
-          <span class="filename">{download.file_name}</span>
-          <span class="status">{download.status}</span>
-          <div class="progress-bar">
-            <div class="progress" style="width: {download.progress}%"></div>
-          </div>
-        </div>
-      {/each}
-    </div>
-  {/if}
-</section>
-
-<style>
-  /* (Keep your previous styles, but add this one for completed items) */
-  .filename {
-    font-weight: bold;
-    word-break: break-all;
-    display: block;
-    margin-bottom: 0.5rem;
-  }
-  .download-item.completed {
-    opacity: 0.7;
-    border-left: 4px solid #4CAF50;
-  }
-    /* Rest of the styles from previous step */
-  .list {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
-  .download-item {
-    background-color: #333;
-    padding: 1rem;
-    border-radius: 5px;
-    border-left: 4px solid #555;
-    transition: all 0.2s ease-in-out;
-  }
-  .status {
-    font-style: italic;
-    color: #ccc;
-    font-size: 0.9em;
-  }
-  .progress-bar {
-    width: 100%;
-    background-color: #555;
-    border-radius: 5px;
-    height: 10px;
-    margin-top: 0.5rem;
-    overflow: hidden;
-  }
-  .progress {
-    height: 100%;
-    background-color: #4CAF50;
-    border-radius: 5px;
-  }
-</style>
+  async function loadDownloads() {
+    try {
+      downloads = await invoke<Download[]>
