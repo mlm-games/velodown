@@ -62,7 +62,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: 'v${{ needs.create_release_tag.outputs.new_version }}'
+          ref: 'v${{ needs.create_release_tag.outputs.version }}'
       
       - name: Install node
         uses: actions/setup-node@v4
@@ -72,8 +72,8 @@ jobs:
     
       - name: Update tauri.conf.json version
         run: |
-          echo "Updating tauri.conf.json to version ${{ needs.create_release_tag.outputs.new_version }}"
-          sed -i'' 's/"version": ".*"/"version": "${{ needs.create_release_tag.outputs.new_version }}"/' src-tauri/tauri.conf.json
+          echo "Updating tauri.conf.json to version ${{ needs.create_release_tag.outputs.version }}"
+          sed -i'' 's/"version": ".*"/"version": "${{ needs.create_release_tag.outputs.version }}"/' src-tauri/tauri.conf.json
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -96,8 +96,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
         
-          tagName: 'v${{ needs.create_release_tag.outputs.new_version }}'
-          releaseName: 'VeloDown v${{ needs.create_release_tag.outputs.new_version }}'
+          tagName: 'v${{ needs.create_release_tag.outputs.version }}'
+          releaseName: 'VeloDown v${{ needs.create_release_tag.outputs.version }}'
           releaseBody: ${{ needs.create_release_tag.outputs.changelog }}
           releaseDraft: false
           prerelease: ${{ inputs.mark_prerelease }}
@@ -119,7 +119,7 @@ jobs:
               workflow_id: 'aur-publish.yml',
               ref: 'main',
               inputs: {
-                version_name: '${{ needs.create_release_tag.outputs.new_version }}'
+                version_name: '${{ needs.create_release_tag.outputs.version }}'
               }
             });
 
