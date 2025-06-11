@@ -1,24 +1,23 @@
-<!-- src/lib/Settings.svelte -->
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   
   interface AppSettings {
-    download_folder: string;
-    max_concurrent_downloads: number;
-    max_connections_per_download: number;
-    auto_start: boolean;
-    show_notifications: boolean;
-    min_split_size: number;
+    downloadFolder: string;
+    maxConcurrentDownloads: number;
+    maxConnectionsPerDownload: number;
+    autoStart: boolean;
+    showNotifications: boolean;
+    minSplitSize: number;
   }
   
   let settings: AppSettings = {
-    download_folder: '',
-    max_concurrent_downloads: 4,
-    max_connections_per_download: 8,
-    auto_start: true,
-    show_notifications: true,
-    min_split_size: 10485760, // 10MB
+    downloadFolder: '',
+    maxConcurrentDownloads: 4,
+    maxConnectionsPerDownload: 8,
+    autoStart: true,
+    showNotifications: true,
+    minSplitSize: 10485760,
   };
   
   let message = '';
@@ -36,7 +35,7 @@
   async function chooseFolder() {
     try {
       const folder = await invoke<string>('choose_download_folder');
-      settings.download_folder = folder;
+      settings.downloadFolder = folder;
     } catch (error) {
       console.error('Failed to choose folder:', error);
     }
@@ -63,7 +62,7 @@
         <input 
           id="folder" 
           type="text" 
-          bind:value={settings.download_folder} 
+          bind:value={settings.downloadFolder} 
           readonly
           placeholder="Select download folder..."
         />
@@ -78,7 +77,7 @@
       <input 
         id="concurrent" 
         type="number" 
-        bind:value={settings.max_concurrent_downloads} 
+        bind:value={settings.maxConcurrentDownloads} 
         min="1" 
         max="10"
       />
@@ -90,7 +89,7 @@
       <input 
         id="connections" 
         type="number" 
-        bind:value={settings.max_connections_per_download} 
+        bind:value={settings.maxConnectionsPerDownload} 
         min="1" 
         max="16"
       />
@@ -101,7 +100,7 @@
       <label>
         <input 
           type="checkbox" 
-          bind:checked={settings.auto_start}
+          bind:checked={settings.autoStart}
         />
         Auto-start downloads
       </label>
@@ -112,7 +111,7 @@
       <label>
         <input 
           type="checkbox" 
-          bind:checked={settings.show_notifications}
+          bind:checked={settings.showNotifications}
         />
         Show notifications
       </label>
@@ -129,110 +128,44 @@
   {/if}
 </section>
 
+<!-- STYLES -->
 <style>
-  section {
-    max-width: 600px;
-    margin: 0 auto;
+  section { max-width: 600px; margin: 0 auto; }
+  .form-group { margin-bottom: 1.5rem; }
+  label { display: block; margin-bottom: 0.5rem; font-weight: 500; }
+  input[type="text"], input[type="number"] {
+    width: 100%; padding: 10px; background: #2a2a2a;
+    border: 1px solid #444; border-radius: 4px;
+    color: #fff; font-size: 14px;
   }
-
-  .form-group {
-    margin-bottom: 1.5rem;
-  }
-
-  label {
-    display: block;
-    margin-bottom: 0.5rem;
-    font-weight: 500;
-  }
-
-  input[type="text"],
-  input[type="number"] {
-    width: 100%;
-    padding: 10px;
-    background: #2a2a2a;
-    border: 1px solid #444;
-    border-radius: 4px;
-    color: #fff;
-    font-size: 14px;
-  }
-
-  input[type="number"] {
-    max-width: 120px;
-  }
-
-  .folder-selector {
-    display: flex;
-    gap: 8px;
-  }
-
-  .folder-selector input {
-    flex: 1;
-  }
-
+  input[type="number"] { max-width: 120px; }
+  .folder-selector { display: flex; gap: 8px; }
+  .folder-selector input { flex: 1; }
   .browse-btn {
-    padding: 10px 20px;
-    background: #555;
-    border: none;
-    border-radius: 4px;
-    color: #fff;
-    cursor: pointer;
+    padding: 10px 20px; background: #555; border: none;
+    border-radius: 4px; color: #fff; cursor: pointer;
     transition: background 0.3s;
   }
-
-  .browse-btn:hover {
-    background: #666;
-  }
-
+  .browse-btn:hover { background: #666; }
   .checkbox-group label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    cursor: pointer;
-    font-weight: normal;
+    display: flex; align-items: center; gap: 8px;
+    cursor: pointer; font-weight: normal;
   }
-
-  input[type="checkbox"] {
-    width: auto;
-    cursor: pointer;
-  }
-
+  input[type="checkbox"] { width: auto; cursor: pointer; }
   small {
-    display: block;
-    margin-top: 0.25rem;
-    color: #888;
+    display: block; margin-top: 0.25rem; color: #888;
     font-size: 0.875rem;
   }
-
   .save-btn {
-    width: 100%;
-    padding: 12px;
-    background: #4CAF50;
-    border: none;
-    border-radius: 4px;
-    color: white;
-    font-size: 16px;
-    cursor: pointer;
-    transition: background 0.3s;
+    width: 100%; padding: 12px; background: #4CAF50;
+    border: none; border-radius: 4px; color: white;
+    font-size: 16px; cursor: pointer; transition: background 0.3s;
   }
-
-  .save-btn:hover {
-    background: #45a049;
-  }
-
+  .save-btn:hover { background: #45a049; }
   .message {
-    margin-top: 1rem;
-    padding: 12px;
-    border-radius: 4px;
+    margin-top: 1rem; padding: 12px; border-radius: 4px;
     text-align: center;
   }
-
-  .message.success {
-    background: #4CAF50;
-    color: white;
-  }
-
-  .message.error {
-    background: #f44336;
-    color: white;
-  }
+  .message.success { background: #4CAF50; color: white; }
+  .message.error { background: #f44336; color: white; }
 </style>

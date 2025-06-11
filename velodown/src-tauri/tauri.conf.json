@@ -40,5 +40,9 @@
       "icons/icon.ico"
     ]
   },
-  "plugins": {}
+  "plugins": {
+    "dialog": null,
+    "notification": null,
+    "opener": null
+  }
 }
