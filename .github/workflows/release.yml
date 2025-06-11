@@ -134,7 +134,7 @@ jobs:
           body: ${{ needs.prepare_release.outputs.release_notes }}
           prerelease: ${{ inputs.mark_prerelease }}
         
-          files: tauri-artifacts/**/*
+          files: tauri/target/release/bundle/
 
 
   deploy:
