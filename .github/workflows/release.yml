@@ -50,13 +50,12 @@ jobs:
           jq --arg new_version "${{ inputs.version_name }}" '.version = $new_version' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
 
 
-      - name: Commit, Tag, and Push version changes
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: 'chore(release): Bump version to ${{ inputs.version_name }}'
-          tagging_message: 'v${{ inputs.version_name }}'
-          push_options: '--follow-tags'
-
+      - name: Commit and push version changes
+        run: |
+          git add .
+          git commit -m "chore(release): Bump version to ${{ inputs.version_name }}"
+          git push
+        
   build_tauri:
     needs: prepare_release
     permissions:
