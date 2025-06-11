@@ -52,6 +52,8 @@ jobs:
 
       - name: Commit and push version changes
         run: |
+          git config --global user.email "you@example.com"
+          git config --global user.name "mlm-games"
           git add .
           git commit -m "chore(release): Bump version to ${{ inputs.version_name }}"
           git push
