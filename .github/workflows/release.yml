@@ -93,29 +93,14 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # with:
-          # args: '--no-dev-path --no-debug'
-
-  create_github_release:
-    needs: [prepare_release, build_tauri]
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
         with:
-          path: tauri-artifacts/
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: 'v${{ needs.prepare_release.outputs.version }}'
-          name: 'VeloDown v${{ needs.prepare_release.outputs.version }}'
-          # use the generated changelog from the first job as the release body
-          body: ${{ needs.prepare_release.outputs.release_notes }}
+          tagName: 'v${{ needs.prepare_release.outputs.version }}'
+          releaseName: 'VeloDown v${{ needs.prepare_release.outputs.version }}'
+          releaseBody: ${{ needs.prepare_release.outputs.release_notes }}
+          releaseDraft: false
           prerelease: ${{ inputs.mark_prerelease }}
-          files: tauri-artifacts/*/*
+          # args: '-- --no-dev-path --no-debug'
+
 
   deploy:
     needs: create_github_release
