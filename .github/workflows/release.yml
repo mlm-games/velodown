@@ -34,16 +34,15 @@ jobs:
 
       - name: Generate Release Notes
         id: generate_notes
-        uses: mlm-games/release-notes-generator@v1.1.0 # Using the action you provided
+        uses: mlm-games/release-notes-generator@v1.1.0
         with:
           version: ${{ inputs.version_name }}
           changelog-path: 'CHANGELOG.md'
-          auto-commit: 'false' 
+          auto-commit: 'false'
           exclude-patterns: 'chore(release),Merge pull request'
 
       - name: Update version files
         run: |
-          echo "Bumping versions to ${{ inputs.version_name }}"
           npm version ${{ inputs.version_name }} --no-git-tag-version
           sed -i'' 's/"version": ".*"/"version": "${{ inputs.version_name }}"/' src-tauri/tauri.conf.json
       
@@ -90,20 +89,56 @@ jobs:
         run: npm run build
 
       - name: Build with Tauri Action
+        id: tauri-build
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: 'v${{ needs.prepare_release.outputs.version }}'
-          releaseName: 'VeloDown v${{ needs.prepare_release.outputs.version }}'
-          releaseBody: ${{ needs.prepare_release.outputs.release_notes }}
-          releaseDraft: false
-          prerelease: ${{ inputs.mark_prerelease }}
+        
           # args: '-- --no-dev-path --no-debug'
+
+    
+    
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+        
+          name: build-artifact-${{ matrix.platform }}
+        
+          path: ${{ steps.tauri-build.outputs.artifactPaths }}
+
+
+
+  create_github_release:
+    needs: build_tauri
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+    
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+        
+          path: tauri-artifacts/
+
+      - name: List downloaded files for debugging
+        run: ls -R tauri-artifacts
+
+    
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: 'v${{ needs.prepare_release.outputs.version }}'
+          name: 'VeloDown v${{ needs.prepare_release.outputs.version }}'
+          body: ${{ needs.prepare_release.outputs.release_notes }}
+          prerelease: ${{ inputs.mark_prerelease }}
+        
+          files: tauri-artifacts/**/*
 
 
   deploy:
-    needs: build_tauri
+    needs: create_github_release
     runs-on: ubuntu-latest
     steps:
       - name: Trigger AUR Publish
