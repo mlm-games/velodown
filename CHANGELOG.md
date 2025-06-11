@@ -1,3 +1,13 @@
+## v0.1.20
+
+- try 22.04 by @mlm-studios
+- give write perms (missed it) by @mlm-studios
+- use older 20.04 for building by @mlm-studios
+- remove fetch ref by @mlm-studios
+- git config name by @mlm-studios
+- Do not associate tag with commit by @mlm-studios
+
+
 ## v0.1.19
 
 - give write perms (missed it) by @mlm-studios
