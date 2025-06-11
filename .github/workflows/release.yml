@@ -18,43 +18,7 @@ on:
         type: boolean
 
 jobs:
-  prepare_release:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    outputs:
-      version: ${{ inputs.version_name }}
-      release_notes: ${{ steps.generate_notes.outputs.release-notes }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Generate Release Notes
-        id: generate_notes
-        uses: mlm-games/release-notes-generator@v1.1.0
-        with:
-          version: ${{ inputs.version_name }}
-          changelog-path: 'CHANGELOG.md'
-          auto-commit: 'false'
-          exclude-patterns: 'chore(release),Merge pull request'
-
-      - name: Update version files
-        run: |
-          npm version ${{ inputs.version_name }} --no-git-tag-version
-          sed -i'' 's/"version": ".*"/"version": "${{ inputs.version_name }}"/' src-tauri/tauri.conf.json
-      
-      - name: Commit, Tag, and Push
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: 'chore(release): Bump version to ${{ inputs.version_name }}'
-          tagging_message: 'v${{ inputs.version_name }}'
-          push_options: '--follow-tags'
-
-  build_tauri:
-    needs: prepare_release
+  publish-tauri:
     permissions:
       contents: write
     strategy:
@@ -63,15 +27,25 @@ jobs:
         platform: [macos-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.platform }}
     steps:
-      - name: Checkout repository at new tag
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: 'v${{ needs.prepare_release.outputs.version }}'
 
       - name: Install node
         uses: actions/setup-node@v4
         with:
           node-version: 'lts/*'
+
+      - name: Update version files
+        run: |
+          npm version ${{ inputs.version_name }} --no-git-tag-version
+          sed -i'' 's/"version": ".*"/"version": "${{ inputs.version_name }}"/' src-tauri/tauri.conf.json
+      
+      - name: Commit, Tag, and Push version changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'chore(release): Bump version to ${{ inputs.version_name }}'
+          tagging_message: 'v${{ inputs.version_name }}'
+          push_options: '--follow-tags'
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -88,57 +62,20 @@ jobs:
       - name: Build the frontend
         run: npm run build
 
-      - name: Build with Tauri Action
-        id: tauri-build
+      - name: Build and Release with Tauri Action
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # with:
-        
+        with:
+          tagName: 'v${{ inputs.version_name }}'
+          releaseName: 'VeloDown v${{ inputs.version_name }}'
+          releaseBody: 'New release of VeloDown. Download the installer for your OS below.'
+          releaseDraft: false
+          prerelease: ${{ inputs.mark_prerelease }}
           # args: '-- --no-dev-path --no-debug'
 
-    
-    
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-        
-          name: build-artifact-${{ matrix.platform }}
-        
-          path: ${{ steps.tauri-build.outputs.artifactPaths }}
-
-
-
-  create_github_release:
-    needs: build_tauri
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    steps:
-    
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
-        with:
-        
-          path: tauri-artifacts/
-
-      - name: List downloaded files for debugging
-        run: ls -R tauri-artifacts
-
-    
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: 'v${{ needs.prepare_release.outputs.version }}'
-          name: 'VeloDown v${{ needs.prepare_release.outputs.version }}'
-          body: ${{ needs.prepare_release.outputs.release_notes }}
-          prerelease: ${{ inputs.mark_prerelease }}
-        
-          files: tauri/target/release/bundle/
-
-
   deploy:
-    needs: create_github_release
+    needs: publish-tauri
     runs-on: ubuntu-latest
     steps:
       - name: Trigger AUR Publish
@@ -153,7 +90,7 @@ jobs:
               workflow_id: 'aur-publish.yml',
               ref: 'main',
               inputs: {
-                version_name: '${{ needs.prepare_release.outputs.version }}'
+                version_name: '${{ inputs.version_name }}'
               }
             });
 
