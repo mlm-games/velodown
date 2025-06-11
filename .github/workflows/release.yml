@@ -61,6 +61,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: 'v${{ needs.create_release_tag.outputs.new_version }}'
       
       - name: Install node
         uses: actions/setup-node@v4
@@ -71,7 +73,7 @@ jobs:
       - name: Update tauri.conf.json version
         run: |
           echo "Updating tauri.conf.json to version ${{ needs.create_release_tag.outputs.new_version }}"
-          sed -i 's/"version": ".*"/"version": "${{ needs.create_release_tag.outputs.new_version }}"/' src-tauri/tauri.conf.json
+          sed -i'' 's/"version": ".*"/"version": "${{ needs.create_release_tag.outputs.new_version }}"/' src-tauri/tauri.conf.json
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
