@@ -1,24 +1,27 @@
+<!-- src/lib/DownloadList.svelte -->
+
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
 
+  // --- FIX: Use camelCase to match the Rust struct ---
   interface Download {
     id: string;
     url: string;
     status: 'queued' | 'downloading' | 'paused' | 'completed' | 'failed' | 'verifying';
     progress: number;
-    file_name: string;
-    save_path: string;
-    total_size: number;
-    downloaded_size: number;
+    fileName: string;       // Corrected
+    savePath: string;       // Corrected
+    totalSize: number;      // Corrected
+    downloadedSize: number; // Corrected
     speed: number;
-    time_remaining: number | null;
-    resume_capability: boolean;
-    error_message: string | null;
-    created_at: string;
-    completed_at: string | null;
-    file_type: string;
+    timeRemaining: number | null; // Corrected
+    resumeCapability: boolean;  // Corrected
+    errorMessage: string | null;  // Corrected
+    createdAt: string;          // Corrected
+    completedAt: string | null; // Corrected
+    fileType: string;           // Corrected
   }
 
   let downloads: Download[] = [];
@@ -30,12 +33,13 @@
   $: filteredDownloads = downloads.filter(d => {
     const matchesFilter = 
       filter === 'all' ||
-      (filter === 'active' && ['queued', 'downloading', 'paused'].includes(d.status)) ||
+      (filter === 'active' && ['queued', 'downloading', 'paused', 'verifying'].includes(d.status)) ||
       (filter === 'completed' && d.status === 'completed');
     
+    // FIX: Search camelCase properties
     const matchesSearch = 
       searchQuery === '' ||
-      d.file_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      d.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       d.url.toLowerCase().includes(searchQuery.toLowerCase());
     
     return matchesFilter && matchesSearch;
@@ -52,6 +56,7 @@
       } else {
         downloads = [updatedTask, ...downloads];
       }
+      downloads = downloads; // Trigger Svelte reactivity
     });
 
     unlistenDownloadRemoved = await listen('download_removed', (event: any) => {
@@ -99,9 +104,10 @@
     }
   }
 
-  async function openFile(path: string, fileName: string) {
+  async function openFile(savePath: string, fileName: string) {
     try {
-      await invoke('open_file', { path: `${path}/${fileName}` });
+      // Use the corrected command that takes separate arguments
+      await invoke('open_file', { savePath, fileName });
     } catch (error) {
       console.error('Failed to open file:', error);
     }
@@ -115,8 +121,9 @@
     }
   }
 
+  // --- FIX: Robust formatting functions ---
   function formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 B';
+    if (!bytes || bytes <= 0) return '0 B';
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -124,22 +131,19 @@
   }
 
   function formatSpeed(bytesPerSecond: number): string {
+    if (!bytesPerSecond || bytesPerSecond <= 0) return '0 B/s';
     return formatBytes(bytesPerSecond) + '/s';
   }
 
   function formatTime(seconds: number | null): string {
-    if (!seconds) return '--:--';
+    if (seconds === null || seconds <= 0 || !isFinite(seconds)) return '∞';
+    if (seconds > 86400 * 30) return '>30d'; 
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    
-    if (hours > 0) {
-      return `${hours}h ${minutes}m`;
-    } else if (minutes > 0) {
-      return `${minutes}m ${secs}s`;
-    } else {
-      return `${secs}s`;
-    }
+    const secs = Math.floor(seconds % 60);
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    if (minutes > 0) return `${minutes}m ${secs}s`;
+    return `${secs}s`;
   }
 
   function getStatusIcon(status: string): string {
@@ -170,32 +174,11 @@
 <section>
   <div class="controls">
     <div class="filters">
-      <button 
-        class:active={filter === 'all'} 
-        on:click={() => filter = 'all'}
-      >
-        All
-      </button>
-      <button 
-        class:active={filter === 'active'} 
-        on:click={() => filter = 'active'}
-      >
-        Active
-      </button>
-      <button 
-        class:active={filter === 'completed'} 
-        on:click={() => filter = 'completed'}
-      >
-        Completed
-      </button>
+      <button class:active={filter === 'all'} on:click={() => filter = 'all'}>All</button>
+      <button class:active={filter === 'active'} on:click={() => filter = 'active'}>Active</button>
+      <button class:active={filter === 'completed'} on:click={() => filter = 'completed'}>Completed</button>
     </div>
-    
-    <input 
-      type="search" 
-      bind:value={searchQuery} 
-      placeholder="Search downloads..."
-      class="search-input"
-    />
+    <input type="search" bind:value={searchQuery} placeholder="Search downloads..." class="search-input" />
   </div>
 
   <div class="downloads-list">
@@ -211,11 +194,11 @@
             <div class="file-info">
               <span class="status-icon">{getStatusIcon(download.status)}</span>
               <div>
-                <h3 class="file-name">{download.file_name}</h3>
+                <h3 class="file-name">{download.fileName}</h3>
                 <p class="file-details">
-                  {download.file_type} • {formatBytes(download.total_size)}
+                  {download.fileType} • {formatBytes(download.totalSize)}
                   {#if download.status === 'downloading'}
-                    • {formatSpeed(download.speed)} • {formatTime(download.time_remaining)}
+                    • {formatSpeed(download.speed)} • {formatTime(download.timeRemaining)}
                   {/if}
                 </p>
               </div>
@@ -223,29 +206,21 @@
             
             <div class="actions">
               {#if download.status === 'downloading'}
-                <button on:click={() => pauseDownload(download.id)} title="Pause">
-                  ⏸️
-                </button>
+                <button on:click={() => pauseDownload(download.id)} title="Pause">⏸️</button>
               {:else if download.status === 'paused' || download.status === 'failed'}
-                <button on:click={() => resumeDownload(download.id)} title="Resume">
-                  ▶️
-                </button>
+                <button on:click={() => resumeDownload(download.id)} title="Resume">▶️</button>
               {/if}
               
               {#if download.status === 'completed'}
-                <button on:click={() => openFile(download.save_path, download.file_name)} title="Open File">
-                  📄
-                </button>
+                <!-- FIX: Access camelCase properties -->
+                <button on:click={() => openFile(download.savePath, download.fileName)} title="Open File">📄</button>
               {/if}
               
-              <button on:click={() => openFolder(download.save_path)} title="Open Folder">
-                📁
-              </button>
+              <!-- FIX: Access camelCase property -->
+              <button on:click={() => openFolder(download.savePath)} title="Open Folder">📁</button>
               
               {#if download.status !== 'completed'}
-                <button on:click={() => cancelDownload(download.id)} title="Cancel" class="cancel-btn">
-                  ❌
-                </button>
+                <button on:click={() => cancelDownload(download.id)} title="Cancel" class="cancel-btn">❌</button>
               {/if}
             </div>
           </div>
@@ -259,8 +234,9 @@
             </div>
           {/if}
           
-          {#if download.error_message}
-            <p class="error-message">{download.error_message}</p>
+          <!-- FIX: Access camelCase property -->
+          {#if download.errorMessage}
+            <p class="error-message">{download.errorMessage}</p>
           {/if}
         </div>
       {/each}
