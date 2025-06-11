@@ -1,3 +1,4 @@
+
 name: 'Release'
 
 on:
@@ -18,9 +19,8 @@ on:
         required: false
         default: 'false'
         type: boolean
-
 jobs:
-  create_release_tag:
+  generate_version_and_changelog:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -35,22 +35,18 @@ jobs:
         with:
           fetch-depth: 0
 
-    
-    
       - name: Conventional Changelog Action
         id: changelog
         uses: TriPSs/conventional-changelog-action@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           tag-prefix: 'v'
-        
-          git-push: true
-  
+          skip-commit: 'true'
+          skip-tag: 'true'
 
   build_and_release:
-    needs: create_release_tag
-  
-    if: needs.create_release_tag.outputs.skipped == 'false'
+    needs: generate_version_and_changelog
+    if: needs.generate_version_and_changelog.outputs.skipped == 'false'
     permissions:
       contents: write
     strategy:
@@ -61,19 +57,16 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: 'v${{ needs.create_release_tag.outputs.version }}'
-      
+
       - name: Install node
         uses: actions/setup-node@v4
         with:
           node-version: 'lts/*'
 
-    
-      - name: Update tauri.conf.json version
+      - name: Update version files
         run: |
-          echo "Updating tauri.conf.json to version ${{ needs.create_release_tag.outputs.version }}"
-          sed -i'' 's/"version": ".*"/"version": "${{ needs.create_release_tag.outputs.version }}"/' src-tauri/tauri.conf.json
+          npm version ${{ needs.generate_version_and_changelog.outputs.new_version }} --no-git-tag-version
+          sed -i'' 's/"version": ".*"/"version": "${{ needs.generate_version_and_changelog.outputs.new_version }}"/' src-tauri/tauri.conf.json
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -90,17 +83,18 @@ jobs:
       - name: Build the frontend
         run: npm run build
 
-      - name: Build and create GitHub Release
+      - name: Build and Release with Tauri Action
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-        
-          tagName: 'v${{ needs.create_release_tag.outputs.version }}'
-          releaseName: 'VeloDown v${{ needs.create_release_tag.outputs.version }}'
-          releaseBody: ${{ needs.create_release_tag.outputs.changelog }}
+          tagName: 'v${{ needs.generate_version_and_changelog.outputs.new_version }}'
+          releaseName: 'VeloDown v${{ needs.generate_version_and_changelog.outputs.new_version }}'
+          releaseBody: ${{ needs.generate_version_and_changelog.outputs.changelog }}
           releaseDraft: false
           prerelease: ${{ inputs.mark_prerelease }}
+          # This tells tauri-action to commit the changed package.json/tauri.conf.json
+          args: '--no-dev-path --no-debug'
 
 
   deploy:
@@ -119,7 +113,7 @@ jobs:
               workflow_id: 'aur-publish.yml',
               ref: 'main',
               inputs: {
-                version_name: '${{ needs.create_release_tag.outputs.version }}'
+                version_name: '${{ needs.build_and_release.outputs.appVersion }}'
               }
             });
 
