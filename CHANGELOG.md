@@ -1,10 +1,12 @@
-## [0.1.2](https://github.com/mlm-games/velodown/compare/v0.1.0...v0.1.2) (2025-06-11)
+## [0.1.3](https://github.com/mlm-games/velodown/compare/v0.1.0...v0.1.3) (2025-06-11)
 
 
 ### Bug Fixes
 
 * Correct workflow ([8471dd4](https://github.com/mlm-games/velodown/commit/8471dd4aaedf52f8132bb3c96318257d9a89b96c))
+* macos build error ([dfd5849](https://github.com/mlm-games/velodown/commit/dfd584947dcd3b60d5adefcf13c4daebf8788a6f))
 * simplify workflow ([90cb34a](https://github.com/mlm-games/velodown/commit/90cb34a8fe0daee18e1afb0613c158942b00d483))
+* use version ref from conventional changelog action ([d8bd22e](https://github.com/mlm-games/velodown/commit/d8bd22e0d3618863327f8c2a3e4e34e632e6fcf5))
 
 
 
