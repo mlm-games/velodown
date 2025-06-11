@@ -1,3 +1,10 @@
+## v0.1.14
+
+- remove fetch ref by @mlm-studios
+- git config name by @mlm-studios
+- Do not associate tag with commit by @mlm-studios
+
+
 ## v0.1.13
 
 - git config name by @mlm-studios
