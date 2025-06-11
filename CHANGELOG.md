@@ -1,3 +1,8 @@
+## v0.1.24
+
+- Update release.yml to fix build by @ragebreaker
+
+
 ## v0.1.21
 
 - rem patchelff by @mlm-studios
