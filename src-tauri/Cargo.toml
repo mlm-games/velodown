@@ -1,6 +1,6 @@
 [package]
 name = "velodown"
-version = "0.1.0"
+version = "0.2.12"
 description = "A powerful download manager"
 authors = ["you"]
 edition = "2021"

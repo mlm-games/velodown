@@ -1,3 +1,8 @@
+## v0.2.12
+
+- Update release.yml by @ragebreaker
+
+
 ## v0.2.11
 
 - Update release.yml to prevent toml editing by @ragebreaker
