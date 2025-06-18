@@ -1,0 +1,118 @@
+name: velodown
+base: core22
+version: '{{VERSION}}'
+summary: A blazing-fast download manager built with Rust and Tauri
+description: |
+  VeloDown is a high-performance download manager that makes downloading files 
+  faster and more reliable. Built with Rust for speed and Tauri for a modern, 
+  lightweight interface.
+  
+  Features:
+  - Multi-threaded downloads with configurable connections
+  - Pause and resume support
+  - Automatic retry for failed downloads
+  - Real-time progress tracking
+  - Smart file detection from URLs
+  - Flexible save locations
+  - Desktop notifications
+  - Dark theme interface
+  - System tray integration
+
+grade: stable
+confinement: strict
+compression: lzo
+
+architectures:
+  - build-on: amd64
+  - build-on: arm64
+
+apps:
+  velodown:
+    command: velodown
+    extensions: [gnome]
+    plugs:
+      - home
+      - removable-media
+      - network
+      - network-bind
+      - network-observe
+      - opengl
+      - x11
+      - wayland
+      - desktop
+      - desktop-legacy
+      - unity7
+      - browser-support
+      - password-manager-service
+    desktop: share/applications/velodown.desktop
+    environment:
+      WEBKIT_DISABLE_COMPOSITING_MODE: 1
+      GTK_USE_PORTAL: 0
+
+parts:
+  velodown:
+    plugin: dump
+    source: https://github.com/mlm-games/velodown/releases/download/v{{VERSION}}/velodown_{{VERSION}}_amd64.AppImage
+    source-type: file
+    build-packages:
+      - squashfs-tools
+    stage-packages:
+      - libwebkit2gtk-4.1-0
+      - libjavascriptcoregtk-4.1-0
+      - libsoup-3.0-0
+      - libglib2.0-0
+      - libgtk-3-0
+      - libayatana-appindicator3-1
+      - libayatana-indicator3-7
+      - libdbusmenu-glib4
+      - libdbusmenu-gtk3-4
+    override-build: |
+      # Extract AppImage
+      chmod +x velodown_{{VERSION}}_amd64.AppImage
+      ./velodown_{{VERSION}}_amd64.AppImage --appimage-extract
+      
+      # Install files
+      install -Dm755 squashfs-root/usr/bin/velodown $SNAPCRAFT_PART_INSTALL/velodown
+      
+      # Install desktop file
+      mkdir -p $SNAPCRAFT_PART_INSTALL/share/applications
+      cat > $SNAPCRAFT_PART_INSTALL/share/applications/velodown.desktop << 'EOF'
+      [Desktop Entry]
+      Version=1.0
+      Type=Application
+      Name=VeloDown
+      GenericName=Download Manager
+      Comment=A blazing-fast download manager built with Rust and Tauri
+      Exec=velodown %U
+      Icon=${SNAP}/meta/gui/icon.png
+      Terminal=false
+      Categories=Network;FileTransfer;Qt;
+      MimeType=x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/magnet;
+      Keywords=download;manager;accelerator;rust;tauri;speed;
+      StartupNotify=true
+      StartupWMClass=VeloDown
+      Actions=new-window;
+      
+      [Desktop Action new-window]
+      Name=New Window
+      Exec=velodown --new-window
+      EOF
+      
+      # Install icons
+      for size in 16x16 32x32 48x48 64x64 128x128 256x256; do
+        if [ -f "squashfs-root/usr/share/icons/hicolor/${size}/apps/velodown.png" ]; then
+          install -Dm644 "squashfs-root/usr/share/icons/hicolor/${size}/apps/velodown.png" \
+            "$SNAPCRAFT_PART_INSTALL/share/icons/hicolor/${size}/apps/velodown.png"
+        fi
+      done
+      
+      # Copy icon for snap
+      if [ -f "squashfs-root/usr/share/icons/hicolor/256x256/apps/velodown.png" ]; then
+        mkdir -p $SNAPCRAFT_PART_INSTALL/meta/gui
+        cp "squashfs-root/usr/share/icons/hicolor/256x256/apps/velodown.png" \
+          $SNAPCRAFT_PART_INSTALL/meta/gui/icon.png
+      fi
+
+layout:
+  /usr/share/velodown:
+    bind: $SNAP/usr/share/velodown

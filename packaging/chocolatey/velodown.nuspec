@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>velodown</id>
+    <version>{{VERSION}}</version>
+    <title>VeloDown</title>
+    <authors>MLM Games</authors>
+    <owners>mlmgames</owners>
+    <projectUrl>https://github.com/mlm-games/velodown</projectUrl>
+    <licenseUrl>https://github.com/mlm-games/velodown/blob/main/LICENSE</licenseUrl>
+    <iconUrl>https://raw.githubusercontent.com/mlm-games/velodown/main/src-tauri/icons/128x128.png</iconUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>A blazing-fast download manager built with Rust and Tauri</description>
+    <summary>High-performance download manager with multi-threaded downloads, pause/resume support, and automatic retry</summary>
+    <releaseNotes>https://github.com/mlm-games/velodown/releases/tag/v{{VERSION}}</releaseNotes>
+    <copyright>Copyright (c) 2024 MLM Games</copyright>
+    <tags>download-manager downloader rust tauri file-transfer network utility</tags>
+    <packageSourceUrl>https://github.com/mlm-games/velodown</packageSourceUrl>
+    <docsUrl>https://github.com/mlm-games/velodown#readme</docsUrl>
+    <bugTrackerUrl>https://github.com/mlm-games/velodown/issues</bugTrackerUrl>
+    <dependencies>
+      <dependency id="vcredist140" version="14.20.27508.1" />
+    </dependencies>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

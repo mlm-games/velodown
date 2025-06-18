@@ -1,0 +1,19 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=VeloDown
+GenericName=Download Manager
+Comment=A blazing-fast download manager built with Rust and Tauri
+Exec=velodown %U
+Icon=com.velodown.dev
+Terminal=false
+Categories=Network;FileTransfer;Qt;
+MimeType=x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/magnet;
+Keywords=download;manager;accelerator;rust;tauri;speed;
+StartupNotify=true
+StartupWMClass=VeloDown
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=velodown --new-window

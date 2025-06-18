@@ -9,7 +9,7 @@ use tauri::{AppHandle, Manager, State};
 use tokio::time::{Duration, Instant}; 
 use tauri::Emitter;
 use std::process::Command;
-use reqwest::{cookie::Jar, Client};
+use reqwest::{cookie::Jar};
 use futures::StreamExt;
 use url::Url;
 use chrono::{DateTime, Local};
@@ -17,6 +17,8 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_dialog::{DialogExt, FilePath};
 use tokio::sync::oneshot;
 use tokio::io::AsyncWriteExt;
+use reqwest::{Client};
+use tokio::time::timeout;
 
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36";
 
@@ -354,67 +356,268 @@ async fn start_download_task(id: String, app_handle: AppHandle) -> Result<(), St
     app_handle.state::<AppState>().download_handles.lock().await.insert(id, handle);
     Ok(())
 }
-async fn download_file(id: &str, url: &str, save_path: &str, file_name: &str, resume_from: u64, app_handle: &AppHandle) -> anyhow::Result<()> {
-    let client = Client::builder().user_agent(USER_AGENT).timeout(Duration::from_secs(30)).build()?;
-    let mut request = client.get(url); if resume_from > 0 { request = request.header("Range", format!("bytes={}-", resume_from)); }
-    let response = request.send().await?; let status = response.status();
+
+async fn download_file(
+    id: &str, 
+    url: &str, 
+    save_path: &str, 
+    file_name: &str, 
+    resume_from: u64, 
+    app_handle: &AppHandle
+) -> anyhow::Result<()> {
+    // Create a more robust client with better timeout settings
+    let client = Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(Duration::from_secs(60)) // Increase timeout for initial connection
+        .connect_timeout(Duration::from_secs(30))
+        .pool_idle_timeout(Duration::from_secs(90))
+        .pool_max_idle_per_host(10)
+        .tcp_keepalive(Some(Duration::from_secs(60)))
+        .build()?;
+    
+    let mut request = client.get(url);
+    if resume_from > 0 { 
+        request = request.header("Range", format!("bytes={}-", resume_from)); 
+    }
+    
+    // Add retry logic for initial connection
+    let mut attempts = 0;
+    let max_attempts = 3;
+    let response = loop {
+        attempts += 1;
+        match timeout(Duration::from_secs(45), request.try_clone().unwrap().send()).await {
+            Ok(Ok(resp)) => break resp,
+            Ok(Err(e)) if attempts < max_attempts => {
+                log::warn!("Connection attempt {} failed: {}. Retrying...", attempts, e);
+                tokio::time::sleep(Duration::from_secs(2 * attempts as u64)).await;
+                continue;
+            }
+            Ok(Err(e)) => return Err(anyhow::anyhow!("Failed to connect after {} attempts: {}", max_attempts, e)),
+            Err(_) => {
+                if attempts < max_attempts {
+                    log::warn!("Connection attempt {} timed out. Retrying...", attempts);
+                    tokio::time::sleep(Duration::from_secs(2 * attempts as u64)).await;
+                    continue;
+                } else {
+                    return Err(anyhow::anyhow!("Connection timed out after {} attempts", max_attempts));
+                }
+            }
+        }
+    };
+    
+    let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return Err(anyhow::anyhow!("Authorization failed ({}). The link may be protected or expired.", status));
     }
-    if !status.is_success() { return Err(anyhow::anyhow!("Server returned an error: {}", status)); }
-    let resume_capability = response.headers().get("accept-ranges").map(|v| v == "bytes").unwrap_or(false);
-    let total_size = if resume_from > 0 && response.status() == 206 { response.content_length().unwrap_or(0) + resume_from } else { response.content_length().unwrap_or(0) };
+    if !status.is_success() { 
+        return Err(anyhow::anyhow!("Server returned an error: {}", status)); 
+    }
+    
+    let resume_capability = response.headers()
+        .get("accept-ranges")
+        .map(|v| v == "bytes")
+        .unwrap_or(false);
+    
+    let total_size = if resume_from > 0 && response.status() == 206 { 
+        response.content_length().unwrap_or(0) + resume_from 
+    } else { 
+        response.content_length().unwrap_or(0) 
+    };
+    
+    // Update task info
     {
-        let state: State<AppState> = app_handle.state(); let mut state_guard = state.persistent.lock().await;
+        let state: State<AppState> = app_handle.state();
+        let mut state_guard = state.persistent.lock().await;
         if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id) {
-            task.total_size = total_size; task.resume_capability = resume_capability;
+            task.total_size = total_size;
+            task.resume_capability = resume_capability;
             app_handle.emit("task_updated", &*task).unwrap();
         }
     }
+    
     let file_path = PathBuf::from(&save_path).join(&file_name);
-    if let Some(parent) = file_path.parent() { tokio::fs::create_dir_all(parent).await?; }
-    let mut file = if resume_from > 0 { tokio::fs::OpenOptions::new().append(true).open(&file_path).await? } else { tokio::fs::File::create(&file_path).await? };
-    let mut stream = response.bytes_stream(); let mut downloaded = resume_from;
-    let mut last_update = std::time::Instant::now(); let mut last_downloaded = downloaded;
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?; file.write_all(&chunk).await?; downloaded += chunk.len() as u64;
-        if last_update.elapsed() > Duration::from_millis(100) {
-            let speed = ((downloaded - last_downloaded) as f64 / last_update.elapsed().as_secs_f64()) as u64;
-            let time_remaining = if speed > 0 { Some((total_size - downloaded) / speed) } else { None };
-            let progress = if total_size > 0 { (downloaded as f64 / total_size as f64) * 100.0 } else { 0.0 };
-            {
-                let state: State<AppState> = app_handle.state(); let mut state_guard = state.persistent.lock().await;
-                if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id) {
-                    task.downloaded_size = downloaded; task.progress = progress; task.speed = speed; task.time_remaining = time_remaining;
-                    app_handle.emit("task_updated", &*task).unwrap();
+    if let Some(parent) = file_path.parent() { 
+        tokio::fs::create_dir_all(parent).await?; 
+    }
+    
+    let mut file = if resume_from > 0 { 
+        tokio::fs::OpenOptions::new().append(true).open(&file_path).await? 
+    } else { 
+        tokio::fs::File::create(&file_path).await? 
+    };
+    
+    // Use a smaller buffer for better memory management
+    let mut stream = response.bytes_stream();
+    let mut downloaded = resume_from;
+    let mut last_update = std::time::Instant::now();
+    let mut last_downloaded = downloaded;
+    let mut consecutive_errors = 0;
+    
+    // Buffer writes to reduce I/O operations
+    let mut write_buffer = Vec::with_capacity(1024 * 1024); // 1MB buffer
+    
+    while let Some(chunk_result) = stream.next().await {
+        match chunk_result {
+            Ok(chunk) => {
+                consecutive_errors = 0; // Reset error counter on success
+                
+                // Add to buffer instead of writing immediately
+                write_buffer.extend_from_slice(&chunk);
+                downloaded += chunk.len() as u64;
+                
+                // Write buffer to disk when it's large enough or at regular intervals
+                if write_buffer.len() >= 512 * 1024 { // Write every 512KB
+                    file.write_all(&write_buffer).await?;
+                    write_buffer.clear();
+                }
+                
+                // Update progress
+                if last_update.elapsed() > Duration::from_millis(250) { // Update less frequently
+                    // Flush any remaining buffer
+                    if !write_buffer.is_empty() {
+                        file.write_all(&write_buffer).await?;
+                        write_buffer.clear();
+                    }
+                    
+                    let speed = ((downloaded - last_downloaded) as f64 / last_update.elapsed().as_secs_f64()) as u64;
+                    let time_remaining = if speed > 0 { 
+                        Some((total_size - downloaded) / speed) 
+                    } else { 
+                        None 
+                    };
+                    let progress = if total_size > 0 { 
+                        (downloaded as f64 / total_size as f64) * 100.0 
+                    } else { 
+                        0.0 
+                    };
+                    
+                    {
+                        let state: State<AppState> = app_handle.state();
+                        let mut state_guard = state.persistent.lock().await;
+                        if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id) {
+                            task.downloaded_size = downloaded;
+                            task.progress = progress;
+                            task.speed = speed;
+                            task.time_remaining = time_remaining;
+                            app_handle.emit("task_updated", &*task).unwrap();
+                        }
+                    }
+                    
+                    last_update = std::time::Instant::now();
+                    last_downloaded = downloaded;
                 }
             }
-            last_update = std::time::Instant::now(); last_downloaded = downloaded;
-        }
-    }
-    {
-        let state: State<AppState> = app_handle.state(); let mut state_guard = state.persistent.lock().await;
-        if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id) {
-            task.status = DownloadStatus::Verifying; app_handle.emit("task_updated", &*task).unwrap();
-        }
-    }
-    let metadata = tokio::fs::metadata(&file_path).await?;
-    if total_size > 0 && metadata.len() != total_size { return Err(anyhow::anyhow!("File size mismatch")); }
-    {
-        let state: State<AppState> = app_handle.state(); let mut state_guard = state.persistent.lock().await;
-        let show_notifications = state_guard.settings.show_notifications;
-        if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id) {
-            task.status = DownloadStatus::Completed; task.progress = 100.0; task.downloaded_size = total_size;
-            task.speed = 0; task.completed_at = Some(Local::now());
-            app_handle.emit("task_updated", &*task).unwrap();
-            if show_notifications {
-                let _ = app_handle.notification().builder().title("Download Complete").body(&format!("{} has finished downloading", task.file_name)).show();
+            Err(e) => {
+                consecutive_errors += 1;
+                log::warn!("Error reading chunk (attempt {}): {}", consecutive_errors, e);
+                
+                if consecutive_errors >= 5 {
+                    // Flush buffer before failing
+                    if !write_buffer.is_empty() {
+                        let _ = file.write_all(&write_buffer).await;
+                    }
+                    return Err(anyhow::anyhow!("Too many consecutive errors while downloading: {}", e));
+                }
+                
+                // Small delay before retrying
+                tokio::time::sleep(Duration::from_millis(100 * consecutive_errors as u64)).await;
             }
         }
     }
+    
+    // Write any remaining data in buffer
+    if !write_buffer.is_empty() {
+        file.write_all(&write_buffer).await?;
+    }
+    
+    // Ensure all data is written to disk
+    file.sync_all().await?;
+    
+    // Verify file
+    {
+        let state: State<AppState> = app_handle.state();
+        let mut state_guard = state.persistent.lock().await;
+        if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id) {
+            task.status = DownloadStatus::Verifying;
+            app_handle.emit("task_updated", &*task).unwrap();
+        }
+    }
+    
+    let metadata = tokio::fs::metadata(&file_path).await?;
+    if total_size > 0 && metadata.len() != total_size { 
+        return Err(anyhow::anyhow!("File size mismatch: expected {}, got {}", total_size, metadata.len())); 
+    }
+    
+    // Complete download
+    {
+        let state: State<AppState> = app_handle.state();
+        let mut state_guard = state.persistent.lock().await;
+        let show_notifications = state_guard.settings.show_notifications;
+        if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id) {
+            task.status = DownloadStatus::Completed;
+            task.progress = 100.0;
+            task.downloaded_size = total_size;
+            task.speed = 0;
+            task.completed_at = Some(Local::now());
+            app_handle.emit("task_updated", &*task).unwrap();
+            
+            if show_notifications {
+                let _ = app_handle.notification()
+                    .builder()
+                    .title("Download Complete")
+                    .body(&format!("{} has finished downloading", task.file_name))
+                    .show();
+            }
+        }
+    }
+    
     let _ = save_state(&app_handle.state(), &app_handle).await;
     Ok(())
 }
+
+#[tauri::command]
+async fn remove_download(id: String, state: State<'_, AppState>, app_handle: AppHandle) -> Result<(), String> {
+    // Cancel if still downloading
+    if let Some(handle) = state.download_handles.lock().await.remove(&id) {
+        handle.abort();
+    }
+    
+    // Remove from list
+    state.persistent.lock().await.downloads.retain(|t| t.id != id);
+    save_state(&state, &app_handle).await.map_err(|e| e.to_string())?;
+    app_handle.emit("download_removed", &id).unwrap();
+    Ok(())
+}
+
+#[tauri::command]
+async fn delete_download_with_file(id: String, state: State<'_, AppState>, app_handle: AppHandle) -> Result<(), String> {
+    // Cancel if still downloading
+    if let Some(handle) = state.download_handles.lock().await.remove(&id) {
+        handle.abort();
+    }
+    
+    // Get file path before removing
+    let file_path = {
+        let state_guard = state.persistent.lock().await;
+        state_guard.downloads.iter()
+            .find(|t| t.id == id)
+            .map(|t| PathBuf::from(&t.save_path).join(&t.file_name))
+    };
+    
+    // Delete file if it exists
+    if let Some(path) = file_path {
+        if path.exists() {
+            tokio::fs::remove_file(&path).await.map_err(|e| format!("Failed to delete file: {}", e))?;
+        }
+    }
+    
+    // Remove from list
+    state.persistent.lock().await.downloads.retain(|t| t.id != id);
+    save_state(&state, &app_handle).await.map_err(|e| e.to_string())?;
+    app_handle.emit("download_removed", &id).unwrap();
+    Ok(())
+}
+
 #[tauri::command]
 async fn handle_cli_args(args: Vec<String>) -> Result<(), String> {
     for arg in args.iter().skip(1) { if arg.starts_with("http://") || arg.starts_with("https://") { return Ok(()); } } Ok(())
@@ -440,7 +643,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_download_info, add_download, get_all_downloads, get_settings, update_settings,
             pause_download, resume_download, cancel_download, open_file, open_folder,
-            choose_download_folder, handle_cli_args,
+            choose_download_folder, handle_cli_args, remove_download, delete_download_with_file,
         ])
         .run(tauri::generate_context!()).expect("error while running tauri application");
 }
