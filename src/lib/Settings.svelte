@@ -8,7 +8,10 @@
     maxConnectionsPerDownload: number;
     autoStart: boolean;
     showNotifications: boolean;
-    minSplitSize: number;
+    autoResumeDownloads: boolean;
+    maxResumeAttempts: number;
+    resumeDelaySeconds: number;
+    minFailDurationSeconds: number;
   }
   
   let settings: AppSettings = {
@@ -17,7 +20,10 @@
     maxConnectionsPerDownload: 8,
     autoStart: true,
     showNotifications: true,
-    minSplitSize: 10485760,
+    autoResumeDownloads: true,
+    maxResumeAttempts: 10,
+    resumeDelaySeconds: 0.25,
+    minFailDurationSeconds: 2,
   };
   
   let message = '';
@@ -33,6 +39,7 @@
   });
 
   async function chooseFolder() {
+    if (!settings) return;
     try {
       const folder = await invoke<string>('choose_download_folder');
       settings.downloadFolder = folder;
@@ -42,10 +49,12 @@
   }
 
   async function saveSettings() {
+    if (!settings) return;
     try {
       await invoke('update_settings', { settings });
       message = 'Settings saved successfully!';
       messageType = 'success';
+      setTimeout(() => message = '', 3000);
     } catch (e) {
       message = `Error saving settings: ${e}`;
       messageType = 'error';
@@ -55,80 +64,80 @@
 
 <section>
   <h2>Settings</h2>
-  <form on:submit|preventDefault={saveSettings}>
-    <div class="form-group">
-      <label for="folder">Default Download Folder</label>
-      <div class="folder-selector">
-        <input 
-          id="folder" 
-          type="text" 
-          bind:value={settings.downloadFolder} 
-          readonly
-          placeholder="Select download folder..."
-        />
-        <button type="button" on:click={chooseFolder} class="browse-btn">
-          Browse...
-        </button>
+  
+  {#if !settings}
+    <p>Loading settings...</p>
+  {:else}
+    <form on:submit|preventDefault={saveSettings}>
+      <!-- Download Location -->
+      <div class="form-group">
+        <label for="folder">Default Download Folder</label>
+        <div class="folder-selector">
+          <input id="folder" type="text" bind:value={settings.downloadFolder} readonly />
+          <button type="button" on:click={chooseFolder} class="browse-btn">Browse...</button>
+        </div>
       </div>
-    </div>
-    
-    <div class="form-group">
-      <label for="concurrent">Max Concurrent Downloads</label>
-      <input 
-        id="concurrent" 
-        type="number" 
-        bind:value={settings.maxConcurrentDownloads} 
-        min="1" 
-        max="10"
-      />
-      <small>Number of downloads that can run simultaneously (1-10)</small>
-    </div>
-    
-    <div class="form-group">
-      <label for="connections">Max Connections Per Download</label>
-      <input 
-        id="connections" 
-        type="number" 
-        bind:value={settings.maxConnectionsPerDownload} 
-        min="1" 
-        max="16"
-      />
-      <small>Number of parallel connections for each download (1-16)</small>
-    </div>
-    
-    <div class="form-group checkbox-group">
-      <label>
-        <input 
-          type="checkbox" 
-          bind:checked={settings.autoStart}
-        />
-        Auto-start downloads
-      </label>
-      <small>Automatically start downloads when added</small>
-    </div>
-    
-    <div class="form-group checkbox-group">
-      <label>
-        <input 
-          type="checkbox" 
-          bind:checked={settings.showNotifications}
-        />
-        Show notifications
-      </label>
-      <small>Display notifications when downloads complete</small>
-    </div>
-    
-    <button type="submit" class="save-btn">Save Settings</button>
-  </form>
+      
+      <!-- General Settings -->
+      <div class="grid-2">
+        <div class="form-group">
+          <label for="concurrent">Max Concurrent Downloads</label>
+          <input id="concurrent" type="number" bind:value={settings.maxConcurrentDownloads} min="1" max="10" />
+        </div>
+        <div class="form-group">
+          <label for="connections">Max Connections Per Download</label>
+          <input id="connections" type="number" bind:value={settings.maxConnectionsPerDownload} min="1" max="16" />
+        </div>
+      </div>
+      
+      <!-- Checkbox Options -->
+      <div class="grid-2">
+        <div class="form-group checkbox-group">
+          <label><input type="checkbox" bind:checked={settings.autoStart}/> Auto-start downloads</label>
+        </div>
+        <div class="form-group checkbox-group">
+          <label><input type="checkbox" bind:checked={settings.showNotifications}/> Show notifications</label>
+        </div>
+      </div>
+
+      <hr />
+      
+      <h3 class="section-title">Auto-Resume Failed Downloads</h3>
+      
+      <div class="form-group checkbox-group">
+        <label>
+          <input type="checkbox" bind:checked={settings.autoResumeDownloads} />
+          Automatically try to resume broken downloads
+        </label>
+      </div>
+
+      {#if settings.autoResumeDownloads}
+        <div class="grid-3">
+          <div class="form-group">
+            <label for="resume-attempts">Max Resume Attempts</label>
+            <input id="resume-attempts" type="number" bind:value={settings.maxResumeAttempts} min="1" max="20" />
+          </div>
+          <div class="form-group">
+            <label for="resume-delay">Delay (seconds)</label>
+            <input id="resume-delay" type="number" bind:value={settings.resumeDelaySeconds} min="5" max="300" />
+          </div>
+          <div class="form-group">
+            <label for="quick-fail">Quick Fail (seconds)</label>
+            <input id="quick-fail" type="number" bind:value={settings.minFailDurationSeconds} min="5" max="60" />
+            <small>Don't retry if a download fails faster than this.</small>
+          </div>
+        </div>
+      {/if}
+      
+      <button type="submit" class="save-btn">Save Settings</button>
+    </form>
+  {/if}
   
   {#if message}
-    <div class="message {messageType}">
-      {message}
-    </div>
+    <div class="message {messageType}">{message}</div>
   {/if}
 </section>
 
-<!-- STYLES -->
 <style>
   section { max-width: 600px; margin: 0 auto; }
   .form-group { margin-bottom: 1.5rem; }
@@ -168,4 +177,11 @@
   }
   .message.success { background: #4CAF50; color: white; }
   .message.error { background: #f44336; color: white; }
+
+  hr { border: none; border-top: 1px solid #444; margin: 2rem 0; }
+  .section-title { margin-bottom: 1.5rem; font-size: 1.25rem; }
+  .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.5rem; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; }
+  small { font-size: 0.8rem; color: #888; margin-top: 0.25rem; display: block; }
+
 </style>

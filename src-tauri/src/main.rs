@@ -1,4 +1,3 @@
-// src-tauri/src/main.rs
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
@@ -7,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
-use tokio::time::{Duration};
+use tokio::time::{Duration, Instant}; 
 use tauri::Emitter;
 use std::process::Command;
 use reqwest::{cookie::Jar, Client};
@@ -21,10 +20,11 @@ use tokio::io::AsyncWriteExt;
 
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36";
 
-// --- STRUCTS (Unchanged) ---
+// --- STRUCTS & ENUMS ---
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
-enum DownloadStatus { Queued, Downloading, Paused, Completed, Failed, Verifying }
+enum DownloadStatus { Queued, Downloading, Paused, Completed, Failed, Verifying, Retrying } // NEW: Added Retrying status
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -34,6 +34,7 @@ struct DownloadTask {
     time_remaining: Option<u64>, resume_capability: bool, error_message: Option<String>,
     created_at: DateTime<Local>, completed_at: Option<DateTime<Local>>,
     file_type: String, connections: u8,
+    resume_attempts: u8,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -41,6 +42,10 @@ struct DownloadTask {
 struct AppSettings {
     download_folder: String, max_concurrent_downloads: u32, max_connections_per_download: u8,
     auto_start: bool, show_notifications: bool, min_split_size: u64,
+    auto_resume_downloads: bool,
+    max_resume_attempts: u8,
+    resume_delay_seconds: u64,
+    min_fail_duration_seconds: u64,
 }
 
 impl Default for AppSettings {
@@ -51,6 +56,10 @@ impl Default for AppSettings {
         Self {
             download_folder, max_concurrent_downloads: 4, max_connections_per_download: 8,
             auto_start: true, show_notifications: true, min_split_size: 10 * 1024 * 1024,
+            auto_resume_downloads: true,
+            max_resume_attempts: 5,
+            resume_delay_seconds: 10,
+            min_fail_duration_seconds: 20,
         }
     }
 }
@@ -175,12 +184,12 @@ async fn add_download(payload: AddDownloadPayload, state: State<'_, AppState>, a
     };
     let save_path = payload.custom_path.unwrap_or(default_save_path);
     let new_task = DownloadTask {
-        id: id.clone(), url: payload.url,
-        status: DownloadStatus::Queued, progress: 0.0,
+        id: id.clone(), url: payload.url, status: DownloadStatus::Queued, progress: 0.0,
         file_name: payload.file_name, save_path, total_size: payload.total_size.unwrap_or(0),
         downloaded_size: 0, speed: 0, time_remaining: None, resume_capability: false,
         error_message: None, created_at: Local::now(), completed_at: None,
         file_type, connections: max_connections,
+        resume_attempts: 0, // NEW: Initialize to 0
     };
     state.persistent.lock().await.downloads.push(new_task.clone());
     save_state(&state, &app_handle).await.map_err(|e| e.to_string())?;
@@ -189,8 +198,6 @@ async fn add_download(payload: AddDownloadPayload, state: State<'_, AppState>, a
     Ok(new_task)
 }
 
-
-// --- The rest of the file is unchanged and correct ---
 #[tauri::command]
 async fn get_all_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadTask>, String> { Ok(state.persistent.lock().await.downloads.clone()) }
 #[tauri::command]
@@ -255,32 +262,101 @@ async fn open_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 async fn start_download_task(id: String, app_handle: AppHandle) -> Result<(), String> {
-    let task_info = {
-        let state: State<AppState> = app_handle.state();
-        let mut state_guard = state.persistent.lock().await;
-        let task = state_guard.downloads.iter_mut().find(|t| t.id == id).ok_or("Task not found")?;
-        task.status = DownloadStatus::Downloading; app_handle.emit("task_updated", &*task).unwrap();
-        (task.url.clone(), task.save_path.clone(), task.file_name.clone(), task.downloaded_size)
-    };
-    save_state(&app_handle.state(), &app_handle).await.map_err(|e| e.to_string())?;
-    let app_handle_clone = app_handle.clone(); let id_clone = id.clone();
+    let app_handle_clone = app_handle.clone();
+    let id_clone = id.clone();
+
     let handle = tokio::spawn(async move {
-        if let Err(e) = download_file(id_clone.clone(), task_info.0, task_info.1, task_info.2, task_info.3, app_handle_clone.clone()).await {
+        let settings = {
             let state: State<AppState> = app_handle_clone.state();
-            let mut state_guard = state.persistent.lock().await;
-            if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id_clone) {
-                task.status = DownloadStatus::Failed; task.error_message = Some(e.to_string());
-                app_handle_clone.emit("task_updated", &*task).unwrap();
+            let p_state = state.persistent.lock().await;
+            p_state.settings.clone()
+        };
+
+        loop {
+            let task_info = {
+                let state: State<AppState> = app_handle_clone.state();
+                let mut p_state = state.persistent.lock().await;
+                if let Some(task) = p_state.downloads.iter_mut().find(|t| t.id == id_clone) {
+                    // Only increment attempts if it's not the very first run
+                    if task.status != DownloadStatus::Queued {
+                        task.resume_attempts += 1;
+                    }
+                    task.status = DownloadStatus::Downloading;
+                    app_handle_clone.emit("task_updated", &*task).unwrap();
+                    Some((
+                        task.url.clone(), task.save_path.clone(), task.file_name.clone(),
+                        task.downloaded_size, task.resume_attempts
+                    ))
+                } else {
+                    None
+                }
+            };
+
+            let (url, save_path, file_name, downloaded_size, attempts) = match task_info {
+                Some(info) => info,
+                None => break,
+            };
+
+            let attempt_start_time = Instant::now();
+            
+            // Clone the values right before they are moved
+            let result = download_file(
+                &id_clone, 
+                &url,      
+                &save_path,
+                &file_name,
+                downloaded_size,
+                &app_handle_clone,
+            ).await;
+
+            if result.is_ok() {
+                break;
             }
-            let _ = save_state(&state, &app_handle_clone).await;
+
+            let attempt_duration = attempt_start_time.elapsed();
+            let error_string = result.err().unwrap().to_string();
+
+            // Check for conditions where we should NOT retry
+            let should_fail_permanently = 
+                !settings.auto_resume_downloads ||
+                attempts >= settings.max_resume_attempts ||
+                (attempts > 0 && attempt_duration < Duration::from_secs(settings.min_fail_duration_seconds)) || // Added attempts > 0 check
+                error_string.contains("403") || error_string.contains("404") || error_string.contains("File size mismatch");
+
+            if should_fail_permanently {
+                let state: State<AppState> = app_handle_clone.state();
+                let mut p_state = state.persistent.lock().await;
+                if let Some(task) = p_state.downloads.iter_mut().find(|t| t.id == id_clone) {
+                    task.status = DownloadStatus::Failed;
+                    task.error_message = Some(error_string);
+                    app_handle_clone.emit("task_updated", &*task).unwrap();
+                }
+                break;
+            } else {
+                let state: State<AppState> = app_handle_clone.state();
+                let mut p_state = state.persistent.lock().await;
+                if let Some(task) = p_state.downloads.iter_mut().find(|t| t.id == id_clone) {
+                    task.status = DownloadStatus::Retrying;
+                    task.error_message = Some(format!("Network error. Retrying in {}s... (Attempt {})", settings.resume_delay_seconds, attempts));
+                    app_handle_clone.emit("task_updated", &*task).unwrap();
+                }
+                drop(p_state);
+
+                tokio::time::sleep(Duration::from_secs(settings.resume_delay_seconds)).await;
+            }
         }
+
+        let state: State<AppState> = app_handle_clone.state();
+        state.download_handles.lock().await.remove(&id_clone);
+        let _ = save_state(&state, &app_handle_clone).await;
     });
+    
     app_handle.state::<AppState>().download_handles.lock().await.insert(id, handle);
     Ok(())
 }
-async fn download_file(id: String, url: String, save_path: String, file_name: String, resume_from: u64, app_handle: AppHandle) -> anyhow::Result<()> {
+async fn download_file(id: &str, url: &str, save_path: &str, file_name: &str, resume_from: u64, app_handle: &AppHandle) -> anyhow::Result<()> {
     let client = Client::builder().user_agent(USER_AGENT).timeout(Duration::from_secs(30)).build()?;
-    let mut request = client.get(&url); if resume_from > 0 { request = request.header("Range", format!("bytes={}-", resume_from)); }
+    let mut request = client.get(url); if resume_from > 0 { request = request.header("Range", format!("bytes={}-", resume_from)); }
     let response = request.send().await?; let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return Err(anyhow::anyhow!("Authorization failed ({}). The link may be protected or expired.", status));

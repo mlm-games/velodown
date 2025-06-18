@@ -1,5 +1,3 @@
-<!-- src/lib/DownloadList.svelte -->
-
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
@@ -11,17 +9,18 @@
     url: string;
     status: 'queued' | 'downloading' | 'paused' | 'completed' | 'failed' | 'verifying';
     progress: number;
-    fileName: string;       // Corrected
-    savePath: string;       // Corrected
-    totalSize: number;      // Corrected
-    downloadedSize: number; // Corrected
+    fileName: string;      
+    savePath: string;      
+    totalSize: number;     
+    downloadedSize: number;
     speed: number;
-    timeRemaining: number | null; // Corrected
-    resumeCapability: boolean;  // Corrected
-    errorMessage: string | null;  // Corrected
-    createdAt: string;          // Corrected
-    completedAt: string | null; // Corrected
-    fileType: string;           // Corrected
+    timeRemaining: number | null;
+    resumeCapability: boolean; 
+    errorMessage: string | null; 
+    createdAt: string;         
+    completedAt: string | null;
+    fileType: string;          
+    resumeAttempts: number; 
   }
 
   let downloads: Download[] = [];
@@ -33,10 +32,9 @@
   $: filteredDownloads = downloads.filter(d => {
     const matchesFilter = 
       filter === 'all' ||
-      (filter === 'active' && ['queued', 'downloading', 'paused', 'verifying'].includes(d.status)) ||
+      (filter === 'active' && ['queued', 'downloading', 'paused', 'verifying', 'retrying'].includes(d.status)) ||
       (filter === 'completed' && d.status === 'completed');
     
-    // FIX: Search camelCase properties
     const matchesSearch = 
       searchQuery === '' ||
       d.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -154,6 +152,7 @@
       case 'failed': return '❌';
       case 'queued': return '⏳';
       case 'verifying': return '🔍';
+      case 'retrying': return '🔄'; // NEW
       default: return '❓';
     }
   }
@@ -166,6 +165,7 @@
       case 'failed': return '#f44336';
       case 'queued': return '#9E9E9E';
       case 'verifying': return '#9C27B0';
+      case 'retrying': return '#FFC107'; // NEW (Amber/Yellow color)
       default: return '#757575';
     }
   }
