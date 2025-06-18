@@ -1,3 +1,17 @@
+## v0.2.11
+
+- Update release.yml to prevent toml editing by @ragebreaker
+- add the ps1 files by @mlm-studios
+- Add an context menu to remove downloads, make downloads more stable by @mlm-studios
+- Update README.md by @ragebreaker
+- add screenshots by @mlm-studios
+- add temp icon by @mlm-studios
+- Fix download not working on pausing/retrying by @mlm-studios
+- Create velodown.desktop by @ragebreaker
+- Update aur-publish.yml by @ragebreaker
+- Update release.yml by @ragebreaker
+
+
 ## v0.1.24
 
 - Update release.yml to fix build by @ragebreaker
