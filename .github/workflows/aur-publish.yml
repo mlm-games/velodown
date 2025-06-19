@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version_name:
-        description: 'Version name (e.g., 0.1.0)'
+        description: 'Version name (e.g., 0.1.25)'
         required: true
       increment_pkgrel:
         description: 'Increment pkgrel (for same version updates)'
@@ -18,10 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Download AppImage from release
+      - name: Download Linux AppImage from release
         run: |
           mkdir -p downloads
-          wget -O downloads/velodown.AppImage "https://github.com/${{ github.repository }}/releases/download/v${{ inputs.version_name }}/velodown_${{ inputs.version_name }}_amd64.AppImage"
+          wget -O downloads/velodown.AppImage "https://github.com/mlm-games/velodown/releases/download/v${{ inputs.version_name }}/velodown_${{ inputs.version_name }}_amd64.AppImage"
       
       - name: Extract files from AppImage
         run: |
@@ -29,29 +29,6 @@ jobs:
           chmod +x velodown.AppImage
           ./velodown.AppImage --appimage-extract
           cd ..
-      
-      - name: Create desktop file
-        run: |
-          mkdir -p desktop
-          cat > desktop/velodown.desktop << 'EOF'
-          [Desktop Entry]
-          Name=VeloDown
-          Comment=A powerful download manager built with Tauri
-          GenericName=Download Manager
-          Exec=velodown %U
-          Icon=velodown
-          Terminal=false
-          Type=Application
-          Categories=Network;FileTransfer;Qt;
-          MimeType=x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/magnet;
-          StartupNotify=true
-          Keywords=download;manager;accelerator;
-          Actions=new-window;
-          
-          [Desktop Action new-window]
-          Name=Open a New Window
-          Exec=velodown --new-window
-          EOF
       
       - name: Calculate SHA256 checksums
         id: checksums
@@ -82,20 +59,20 @@ jobs:
         run: |
           mkdir -p aur-package
           cat > aur-package/PKGBUILD << 'EOF'
-          # Maintainer: Your Name <your.email@example.com>
+          # Maintainer: MLM Games <contact@mlmgames.com>
           pkgname=velodown-bin
           pkgver=${{ inputs.version_name }}
           pkgrel=${{ steps.pkgrel.outputs.pkgrel }}
-          pkgdesc="A powerful download manager built with Tauri"
+          pkgdesc="A blazing-fast download manager built with Rust and Tauri"
           arch=('x86_64')
-          url="https://github.com/${{ github.repository }}"
+          url="https://github.com/mlm-games/velodown"
           license=('MIT')
-          depends=('gtk3' 'webkit2gtk' 'libappindicator-gtk3' 'librsvg' 'nss' 'xdotool')
+          depends=('webkit2gtk' 'gtk3' 'libayatana-appindicator')
           optdepends=('libnotify: for desktop notifications')
           provides=('velodown')
           conflicts=('velodown')
           options=('!strip' '!emptydirs')
-          source_x86_64=("velodown-${pkgver}.AppImage::https://github.com/${{ github.repository }}/releases/download/v${pkgver}/velodown_${pkgver}_amd64.AppImage"
+          source_x86_64=("velodown-${pkgver}.AppImage::https://github.com/mlm-games/velodown/releases/download/v${pkgver}/velodown_${pkgver}_amd64.AppImage"
                          "velodown.desktop")
           sha256sums_x86_64=('${{ steps.checksums.outputs.appimage_hash }}'
                              'SKIP')
@@ -106,7 +83,7 @@ jobs:
               cat > "${srcdir}/velodown.desktop" << DESKTOP_EOF
           [Desktop Entry]
           Name=VeloDown
-          Comment=A powerful download manager built with Tauri
+          Comment=A blazing-fast download manager built with Rust and Tauri
           GenericName=Download Manager
           Exec=/opt/velodown/velodown.AppImage %U
           Icon=velodown
@@ -115,7 +92,7 @@ jobs:
           Categories=Network;FileTransfer;Qt;
           MimeType=x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/magnet;
           StartupNotify=true
-          Keywords=download;manager;accelerator;
+          Keywords=download;manager;accelerator;rust;tauri;
           Actions=new-window;
           
           [Desktop Action new-window]
@@ -147,10 +124,10 @@ jobs:
               if [ -d "${srcdir}/squashfs-root" ]; then
                   # Try multiple possible icon locations
                   for icon_path in \
-                      "${srcdir}/squashfs-root/usr/share/icons/hicolor/128x128/apps/com.velodown.dev.png" \
-                      "${srcdir}/squashfs-root/usr/share/icons/hicolor/256x256/apps/com.velodown.dev.png" \
-                      "${srcdir}/squashfs-root/com.velodown.dev.png" \
-                      "${srcdir}/squashfs-root/velodown.png"; do
+                      "${srcdir}/squashfs-root/usr/share/icons/hicolor/128x128/apps/velodown.png" \
+                      "${srcdir}/squashfs-root/usr/share/icons/hicolor/256x256/apps/velodown.png" \
+                      "${srcdir}/squashfs-root/velodown.png" \
+                      "${srcdir}/squashfs-root/icon.png"; do
                       if [ -f "$icon_path" ]; then
                           install -Dm644 "$icon_path" "${pkgdir}/usr/share/pixmaps/velodown.png"
                           break
@@ -159,7 +136,7 @@ jobs:
                   
                   # Install all available icon sizes
                   for size in 16x16 32x32 48x48 64x64 128x128 256x256 512x512; do
-                      icon_file="${srcdir}/squashfs-root/usr/share/icons/hicolor/${size}/apps/com.velodown.dev.png"
+                      icon_file="${srcdir}/squashfs-root/usr/share/icons/hicolor/${size}/apps/velodown.png"
                       if [ -f "$icon_file" ]; then
                           install -Dm644 "$icon_file" "${pkgdir}/usr/share/icons/hicolor/${size}/apps/velodown.png"
                       fi
@@ -173,25 +150,22 @@ jobs:
           cd aur-package
           cat > .SRCINFO << 'EOF'
           pkgbase = velodown-bin
-          	pkgdesc = A powerful download manager built with Tauri
+          	pkgdesc = A blazing-fast download manager built with Rust and Tauri
           	pkgver = ${{ inputs.version_name }}
           	pkgrel = ${{ steps.pkgrel.outputs.pkgrel }}
-          	url = https://github.com/${{ github.repository }}
+          	url = https://github.com/mlm-games/velodown
           	arch = x86_64
           	license = MIT
-          	depends = gtk3
           	depends = webkit2gtk
-          	depends = libappindicator-gtk3
-          	depends = librsvg
-          	depends = nss
-          	depends = xdotool
+          	depends = gtk3
+          	depends = libayatana-appindicator
           	optdepends = libnotify: for desktop notifications
           	provides = velodown
           	conflicts = velodown
           	noextract = velodown-${{ inputs.version_name }}.AppImage
           	options = !strip
           	options = !emptydirs
-          	source_x86_64 = velodown-${{ inputs.version_name }}.AppImage::https://github.com/${{ github.repository }}/releases/download/v${{ inputs.version_name }}/velodown_${{ inputs.version_name }}_amd64.AppImage
+          	source_x86_64 = velodown-${{ inputs.version_name }}.AppImage::https://github.com/mlm-games/velodown/releases/download/v${{ inputs.version_name }}/velodown_${{ inputs.version_name }}_amd64.AppImage
           	source_x86_64 = velodown.desktop
           	sha256sums_x86_64 = ${{ steps.checksums.outputs.appimage_hash }}
           	sha256sums_x86_64 = SKIP
