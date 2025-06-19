@@ -1,24 +1,49 @@
-name: 'Manual Release'
+name: Release builds
 
 on:
   workflow_dispatch:
     inputs:
       version_name:
-        description: 'Release version (e.g., 0.2.0). This must be a new version.'
+        description: 'Version name (e.g., 0.1.25)'
         required: true
+      auto_generate_changelog:
+        description: 'Auto-generate changelog from commits'
+        required: false
+        default: true
+        type: boolean
       mark_prerelease:
-        description: 'Mark as a pre-release?'
+        description: 'Mark as prerelease'
         required: true
         default: 'false'
         type: boolean
-      publish_to_aur:
-        description: 'Publish to AUR?'
+      publish_to_choco:
+        description: 'Publish to Chocolatey'
         required: false
-        default: 'true'
+        default: 'false'
+        type: boolean
+      publish_to_winget:
+        description: 'Publish to WinGet'
+        required: false
+        default: 'false'
+        type: boolean
+      publish_to_scoop:
+        description: 'Manual Publish to Scoop'
+        required: false
+        default: 'false'
+        type: boolean
+      publish_to_aur:
+        description: 'Publish to AUR'
+        required: false
+        default: 'false'
+        type: boolean
+      publish_to_snap:
+        description: 'Publish to Snapcraft'
+        required: false
+        default: 'false'
         type: boolean
 
 jobs:
-  prepare_release:
+  prepare-release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -31,15 +56,18 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate Release Notes
         id: generate_notes
+        if: ${{ inputs.auto_generate_changelog == true }}
         uses: mlm-games/release-notes-generator@v1.1.0
         with:
           version: ${{ inputs.version_name }}
           changelog-path: 'CHANGELOG.md'
-          auto-commit: 'false'
+          auto-commit: 'true'
           exclude-patterns: 'chore(release),Merge pull request'
+          commit-message: 'Update release notes for v{{version}}'
 
       - name: Update version files
         run: |
@@ -58,26 +86,34 @@ jobs:
           git add .
           git commit -m "chore(release): Bump version to ${{ inputs.version_name }}"
           git push
-        
-  build_tauri:
-    needs: prepare_release
+
+  build-tauri:
+    needs: prepare-release
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
-        platform: [macos-latest, ubuntu-latest, windows-latest]
+        include:
+          - platform: 'macos-latest'
+            args: '--target universal-apple-darwin'
+            artifact-name: 'macOS'
+          - platform: 'ubuntu-latest'
+            args: ''
+            artifact-name: 'Linux-x64'
+          - platform: 'windows-latest'
+            args: ''
+            artifact-name: 'Windows-x64'
     runs-on: ${{ matrix.platform }}
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Sync changes
-        run: |
-          sleep 3
-          git config --global user.email "actions@github.com"
-          git config --global user.name "GitHub Actions"
-          git pull
+        with:
+          ref: main
+          
+      - name: Pull latest changes
+        run: git pull
 
       - name: Install node
         uses: actions/setup-node@v4
@@ -86,6 +122,8 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-latest'
@@ -96,33 +134,268 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Build the frontend
-        run: npm run build
-
-      - name: Build and Release with Tauri Action
+      - name: Build the app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: 'v${{ inputs.version_name }}'
+          tagName: v${{ inputs.version_name }}
           releaseName: 'VeloDown v${{ inputs.version_name }}'
           releaseBody: |
-            ${{ needs.prepare_release.outputs.release_notes }}
+            See the changelog for details.
             
             ---
             Download the installer for your OS below.
           releaseDraft: false
           prerelease: ${{ inputs.mark_prerelease }}
+          args: ${{ matrix.args }}
 
-  deploy:
-    needs: build_tauri
+      - name: Generate SHA256 checksums
+        shell: bash
+        run: |
+          # Find the output directory
+          if [ "${{ matrix.platform }}" == "windows-latest" ]; then
+            BUNDLE_DIR="src-tauri/target/release/bundle"
+            EXT="exe|msi"
+          elif [ "${{ matrix.platform }}" == "ubuntu-latest" ]; then
+            BUNDLE_DIR="src-tauri/target/release/bundle"
+            EXT="deb|AppImage"
+          else
+            BUNDLE_DIR="src-tauri/target/release/bundle"
+            EXT="dmg|app"
+          fi
+
+          # Create checksums file
+          echo "# SHA256 Checksums for ${{ matrix.artifact-name }}" > SHA256SUMS.txt
+          echo "Generated on $(date)" >> SHA256SUMS.txt
+          echo "" >> SHA256SUMS.txt
+
+          # Find and hash files
+          find $BUNDLE_DIR -type f -regex ".*\.\($EXT\)" | while read -r file; do
+            HASH=$(sha256sum "$file" | cut -d ' ' -f 1)
+            FILENAME=$(basename "$file")
+            echo "$HASH  $FILENAME" >> SHA256SUMS.txt
+            echo "File: $FILENAME"
+            echo "SHA256: $HASH"
+          done
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}-build
+          path: |
+            src-tauri/target/release/bundle/**/*
+            SHA256SUMS.txt
+
+  publish-chocolatey:
+    needs: [build-tauri]
+    if: ${{ inputs.publish_to_choco == true && inputs.mark_prerelease == false }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Download Windows build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Windows-x64-build
+          path: ./choco-artifacts
+
+      - name: Find exe installer
+        id: find-exe
+        shell: pwsh
+        run: |
+          $exeFile = Get-ChildItem -Path "./choco-artifacts" -Filter "*.exe" -Recurse | Select-Object -First 1
+          if ($null -eq $exeFile) {
+            Write-Error "No exe file found!"
+            exit 1
+          }
+          Write-Output "exe_path=$($exeFile.FullName)" >> $env:GITHUB_OUTPUT
+          Write-Output "exe_name=$($exeFile.Name)" >> $env:GITHUB_OUTPUT
+
+      - name: Get SHA256 hash
+        id: get-hash
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Path "${{ steps.find-exe.outputs.exe_path }}" -Algorithm SHA256).Hash
+          Write-Output "sha256=$($hash.ToLower())" >> $env:GITHUB_OUTPUT
+
+      - name: Setup Chocolatey package files
+        shell: pwsh
+        run: |
+          # Create package directory structure
+          New-Item -ItemType Directory -Force -Path "./packaging/chocolatey/tools"
+          
+          # Copy template files from repository
+          Copy-Item -Path "./packaging/chocolatey/velodown.nuspec" -Destination "./choco-package/"
+          Copy-Item -Path "./packaging/chocolatey/tools/*" -Destination "./choco-package/tools/" -Recurse
+
+      - name: Update Chocolatey files
+        shell: pwsh
+        run: |
+          # Update nuspec
+          $nuspecPath = "./choco-package/velodown.nuspec"
+          $content = Get-Content $nuspecPath
+          $content = $content -replace "{{VERSION}}", "${{ inputs.version_name }}"
+          $content | Set-Content $nuspecPath
+
+          # Update install script
+          $installPath = "./choco-package/tools/chocolateyinstall.ps1"
+          $content = Get-Content $installPath
+          $content = $content -replace "{{VERSION}}", "${{ inputs.version_name }}"
+          $content = $content -replace "{{SHA256_HASH}}", "${{ steps.get-hash.outputs.sha256 }}"
+          $content = $content -replace "{{DOWNLOAD_URL}}", "https://github.com/mlm-games/velodown/releases/download/v${{ inputs.version_name }}"
+          $content = $content -replace "{{APPNAME}}", "VeloDown"
+          $content | Set-Content $installPath
+
+      - name: Pack and push Chocolatey package
+        shell: pwsh
+        env:
+          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+        run: |
+          cd choco-package
+          choco pack
+          choco push velodown.${{ inputs.version_name }}.nupkg --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
+
+  publish-winget:
+    needs: [build-tauri]
+    if: ${{ inputs.publish_to_winget == true && inputs.mark_prerelease == false }}
+    runs-on: windows-latest
+    steps:
+      - name: Submit to WinGet
+        uses: vedantmgoyal2009/winget-releaser@v2
+        with:
+          identifier: MLMGames.VeloDown
+          version: ${{ inputs.version_name }}
+          release-tag: v${{ inputs.version_name }}
+          token: ${{ secrets.WINGET_TOKEN }}
+
+  update-scoop-bucket:
+    needs: [build-tauri]
+    runs-on: ubuntu-latest
+    if: ${{ inputs.publish_to_scoop == true && inputs.mark_prerelease == false }}
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Windows-x64-build
+          path: ./windows-build
+
+      - name: Get installer info
+        id: get-info
+        run: |
+          # Find the exe installer
+          EXE_FILE=$(find ./windows-build -name "*.exe" -type f | head -n 1)
+          if [ -z "$EXE_FILE" ]; then
+            echo "::error::No EXE file found!"
+            exit 1
+          fi
+          
+          # Get hash from SHA256SUMS.txt or calculate it
+          if [ -f "./windows-build/SHA256SUMS.txt" ]; then
+            HASH=$(grep "$(basename "$EXE_FILE")" ./windows-build/SHA256SUMS.txt | cut -d' ' -f1)
+          else
+            HASH=$(sha256sum "$EXE_FILE" | cut -d' ' -f1)
+          fi
+          
+          echo "sha256=${HASH}" >> $GITHUB_OUTPUT
+          echo "exe_name=$(basename "$EXE_FILE")" >> $GITHUB_OUTPUT
+
+      - name: Checkout Scoop bucket
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/buckets-scoop  
+          token: ${{ secrets.SCOOP_TOKEN || secrets.GITHUB_TOKEN }}
+          path: scoop-bucket
+
+      - name: Update Scoop manifest
+        run: |
+          cd scoop-bucket/bucket
+          
+          # Create manifest if it doesn't exist
+          if [ ! -f "velodown.json" ]; then
+            cp ../../packaging/scoop/velodown.json .
+          fi
+          
+          # Update the manifest using jq
+          jq --arg version "${{ inputs.version_name }}" \
+             --arg hash "${{ steps.get-info.outputs.sha256 }}" \
+             --arg url "https://github.com/mlm-games/velodown/releases/download/v${{ inputs.version_name }}/${{ steps.get-info.outputs.exe_name }}" \
+             '.version = $version | 
+              .architecture."64bit".url = $url | 
+              .architecture."64bit".hash = $hash' \
+             velodown.json > velodown.json.tmp && mv velodown.json.tmp velodown.json
+
+      - name: Commit and push changes
+        run: |
+          cd scoop-bucket
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add bucket/velodown.json
+          git commit -m "Update VeloDown to ${{ inputs.version_name }}"
+          git push
+
+  publish-snap:
+    needs: [build-tauri]
+    runs-on: ubuntu-latest
+    if: ${{ inputs.publish_to_snap == true && inputs.mark_prerelease == false }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+          
+      - name: Download Linux build
+        uses: actions/download-artifact@v4
+        with:
+          name: Linux-x64-build
+          path: ./linux-build
+          
+      - name: Extract AppImage
+        run: |
+          # Find AppImage
+          APPIMAGE=$(find ./linux-build -name "*.AppImage" -type f | head -n 1)
+          if [ -z "$APPIMAGE" ]; then
+            echo "No AppImage found!"
+            exit 1
+          fi
+          
+          chmod +x "$APPIMAGE"
+          "$APPIMAGE" --appimage-extract
+          
+          # Copy binary
+          cp squashfs-root/usr/bin/velodown ./builds/velodown || cp squashfs-root/velodown ./builds/velodown
+          chmod +x ./builds/velodown
+          
+      - name: Update snap files
+        run: |
+          # Update version
+          sed -i "s/{{VERSION}}/${{ inputs.version_name }}/g" packaging/snap/snapcraft.yaml
+          
+          # Copy snap files
+          cp -r packaging/snap/* .
+          
+      - name: Build snap
+        uses: snapcore/action-build@v1
+        id: build
+        
+      - name: Publish to Snap Store
+        uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_TOKEN }}
+        with:
+          snap: ${{ steps.build.outputs.snap }}
+          release: stable
+
+  update-aur:
+    needs: [build-tauri]
     runs-on: ubuntu-latest
     if: ${{ inputs.publish_to_aur == true && inputs.mark_prerelease == false }}
     steps:
-      - name: Wait for release assets
-        run: sleep 30  # Give time for assets to be uploaded
-        
-      - name: Trigger AUR Publish
+      - name: Trigger AUR publish workflow
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -130,10 +403,12 @@ jobs:
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'aur-publish.yml', 
+              workflow_id: 'aur-publish.yml',
               ref: 'main',
               inputs: {
                 version_name: '${{ inputs.version_name }}',
                 increment_pkgrel: 'false'
               }
             });
+
+            console.log('Triggered AUR publish workflow for version ${{ inputs.version_name }}');
