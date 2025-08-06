@@ -34,6 +34,7 @@ enum DownloadStatus {
     Failed,
     Verifying,
     Retrying,
+    Cancelled,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -352,27 +353,40 @@ async fn pause_download(
 async fn resume_download(id: String, app_handle: AppHandle) -> Result<(), String> {
     start_download_task(id, app_handle).await
 }
+
 #[tauri::command]
 async fn cancel_download(
     id: String,
     state: State<'_, AppState>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
+    // Abort the running Tokio task if it exists.
     if let Some(handle) = state.download_handles.lock().await.remove(&id) {
         handle.abort();
     }
-    state
-        .persistent
-        .lock()
-        .await
-        .downloads
-        .retain(|t| t.id != id);
+
+    // Find the task and update its status to Cancelled
+    let mut state_guard = state.persistent.lock().await;
+    if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id) {
+        task.status = DownloadStatus::Cancelled;
+        task.speed = 0;
+        task.error_message = Some("Download was cancelled by the user.".to_string());
+
+        // Set resume capability to true for cancelled downloads (so that they can be resumed)
+        task.resume_capability = true;
+
+        app_handle.emit("task_updated", &*task).unwrap();
+    }
+
+    // Save the updated state
+    drop(state_guard);
     save_state(&state, &app_handle)
         .await
         .map_err(|e| e.to_string())?;
-    app_handle.emit("download_removed", &id).unwrap();
+
     Ok(())
 }
+
 #[tauri::command]
 async fn open_file(save_path: String, file_name: String) -> Result<(), String> {
     // Let Rust's PathBuf handle joining paths correctly for any OS
@@ -456,6 +470,7 @@ async fn start_download_task(id: String, app_handle: AppHandle) -> Result<(), St
                         task.resume_attempts += 1;
                     }
                     task.status = DownloadStatus::Downloading;
+                    task.error_message = None;
                     app_handle_clone.emit("task_updated", &*task).unwrap();
                     Some((
                         task.url.clone(),
@@ -476,7 +491,6 @@ async fn start_download_task(id: String, app_handle: AppHandle) -> Result<(), St
 
             let attempt_start_time = Instant::now();
 
-            // Clone the values right before they are moved
             let result = download_file(
                 &id_clone,
                 &url,
@@ -495,10 +509,13 @@ async fn start_download_task(id: String, app_handle: AppHandle) -> Result<(), St
             let error_string = result.err().unwrap().to_string();
 
             // Check for conditions where we should NOT retry
-            let should_fail_permanently = !settings.auto_resume_downloads ||
-                attempts >= settings.max_resume_attempts ||
-                (attempts > 0 && attempt_duration < Duration::from_secs(settings.min_fail_duration_seconds)) || // Added attempts > 0 check
-                error_string.contains("403") || error_string.contains("404") || error_string.contains("File size mismatch");
+            let should_fail_permanently = !settings.auto_resume_downloads
+                || attempts >= settings.max_resume_attempts
+                || (attempts > 0
+                    && attempt_duration < Duration::from_secs(settings.min_fail_duration_seconds))
+                || error_string.contains("403")
+                || error_string.contains("404")
+                || error_string.contains("File size mismatch");
 
             if should_fail_permanently {
                 let state: State<AppState> = app_handle_clone.state();
@@ -515,7 +532,7 @@ async fn start_download_task(id: String, app_handle: AppHandle) -> Result<(), St
                 if let Some(task) = p_state.downloads.iter_mut().find(|t| t.id == id_clone) {
                     task.status = DownloadStatus::Retrying;
                     task.error_message = Some(format!(
-                        "Network error. Retrying in {}s... (Attempt {})",
+                        "Retrying in {}s... (Attempt {})",
                         settings.resume_delay_seconds, attempts
                     ));
                     app_handle_clone.emit("task_updated", &*task).unwrap();
@@ -551,11 +568,12 @@ async fn download_file(
     // Create a more robust client with better timeout settings
     let client = Client::builder()
         .user_agent(USER_AGENT)
-        .timeout(Duration::from_secs(60)) // Increase timeout for initial connection
+        .timeout(Duration::from_secs(0)) // Timeouts is set for chunks instead below
         .connect_timeout(Duration::from_secs(30))
         .pool_idle_timeout(Duration::from_secs(90))
         .pool_max_idle_per_host(10)
         .tcp_keepalive(Some(Duration::from_secs(60)))
+        .tcp_nodelay(true)
         .build()?;
 
     let mut request = client.get(url);
@@ -657,10 +675,19 @@ async fn download_file(
     // Buffer writes to reduce I/O operations
     let mut write_buffer = Vec::with_capacity(1024 * 1024); // 1MB buffer
 
+    let mut last_progress = std::time::Instant::now();
+
     while let Some(chunk_result) = stream.next().await {
+        if last_progress.elapsed() > Duration::from_secs(120) {
+            return Err(anyhow::anyhow!(
+                "Download stalled - no data received for 2 minutes"
+            ));
+        }
+
         match chunk_result {
             Ok(chunk) => {
-                consecutive_errors = 0; // Reset error counter on success
+                last_progress = std::time::Instant::now();
+                consecutive_errors = 0;
 
                 // Add to buffer instead of writing immediately
                 write_buffer.extend_from_slice(&chunk);

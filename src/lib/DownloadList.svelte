@@ -14,7 +14,8 @@
       | "completed"
       | "failed"
       | "verifying"
-      | "retrying";
+      | "retrying"
+      | "cancelled";
     progress: number;
     fileName: string;
     savePath: string;
@@ -223,6 +224,8 @@
         return "🔍";
       case "retrying":
         return "🔄";
+      case "cancelled":
+        return "🚫";
       default:
         return "❓";
     }
@@ -244,6 +247,8 @@
         return "#9C27B0";
       case "retrying":
         return "#FFC107";
+      case "cancelled":
+        return "#795548";
       default:
         return "#757575";
     }
@@ -379,7 +384,7 @@
                   on:click|stopPropagation={() => pauseDownload(download.id)}
                   title="Pause">⏸️</button
                 >
-              {:else if (download.status === "paused" || download.status === "failed") && download.resumeCapability}
+              {:else if (download.status === "paused" || download.status === "failed" || download.status == "cancelled") && download.resumeCapability}
                 <button
                   on:click|stopPropagation={() => resumeDownload(download.id)}
                   title="Resume">▶️</button
@@ -399,7 +404,7 @@
                 title="Open Folder">📁</button
               >
 
-              {#if download.status !== "completed"}
+              {#if download.status !== "completed" && download.status !== "cancelled"}
                 <button
                   on:click|stopPropagation={() => cancelDownload(download.id)}
                   title="Cancel"
@@ -409,7 +414,7 @@
             </div>
           </div>
 
-          {#if ["downloading", "paused", "verifying", "retrying"].includes(download.status)}
+          {#if ["downloading", "paused", "verifying", "retrying", "cancelled"].includes(download.status)}
             <div class="progress-container">
               <div class="progress-bar">
                 <div
