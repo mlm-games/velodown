@@ -1,57 +1,67 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import { invoke } from '@tauri-apps/api/core';
-  import { listen } from '@tauri-apps/api/event';
-    import { error } from '@sveltejs/kit';
+  import { onMount, onDestroy } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
+  import { error } from "@sveltejs/kit";
 
   interface Download {
     id: string;
     url: string;
-    status: 'queued' | 'downloading' | 'paused' | 'completed' | 'failed' | 'verifying' | 'retrying';
+    status:
+      | "queued"
+      | "downloading"
+      | "paused"
+      | "completed"
+      | "failed"
+      | "verifying"
+      | "retrying";
     progress: number;
-    fileName: string;      
-    savePath: string;      
-    totalSize: number;     
+    fileName: string;
+    savePath: string;
+    totalSize: number;
     downloadedSize: number;
     speed: number;
     timeRemaining: number | null;
-    resumeCapability: boolean; 
-    errorMessage: string | null; 
-    createdAt: string;         
+    resumeCapability: boolean;
+    errorMessage: string | null;
+    createdAt: string;
     completedAt: string | null;
-    fileType: string;          
-    resumeAttempts: number; 
+    fileType: string;
+    resumeAttempts: number;
   }
 
   let downloads: Download[] = [];
-  let filter: 'all' | 'active' | 'completed' = 'all';
-  let searchQuery = '';
+  let filter: "all" | "active" | "completed" = "all";
+  let searchQuery = "";
   let unlistenTaskUpdated: (() => void) | undefined;
   let unlistenDownloadRemoved: (() => void) | undefined;
   let contextMenu: { x: number; y: number; downloadId: string } | null = null;
   let contextMenuRef: HTMLDivElement;
   let previouslyFocusedElement: HTMLElement | null = null;
 
-  $: filteredDownloads = downloads.filter(d => {
-    const matchesFilter = 
-      filter === 'all' ||
-      (filter === 'active' && ['queued', 'downloading', 'paused', 'verifying', 'retrying'].includes(d.status)) ||
-      (filter === 'completed' && d.status === 'completed');
-    
-    const matchesSearch = 
-      searchQuery === '' ||
+  $: filteredDownloads = downloads.filter((d) => {
+    const matchesFilter =
+      filter === "all" ||
+      (filter === "active" &&
+        ["queued", "downloading", "paused", "verifying", "retrying"].includes(
+          d.status,
+        )) ||
+      (filter === "completed" && d.status === "completed");
+
+    const matchesSearch =
+      searchQuery === "" ||
       d.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       d.url.toLowerCase().includes(searchQuery.toLowerCase());
-    
+
     return matchesFilter && matchesSearch;
   });
 
   onMount(async () => {
     await loadDownloads();
 
-    unlistenTaskUpdated = await listen('task_updated', (event: any) => {
+    unlistenTaskUpdated = await listen("task_updated", (event: any) => {
       const updatedTask: Download = event.payload;
-      const index = downloads.findIndex(d => d.id === updatedTask.id);
+      const index = downloads.findIndex((d) => d.id === updatedTask.id);
       if (index !== -1) {
         downloads[index] = updatedTask;
       } else {
@@ -60,136 +70,135 @@
       downloads = [...downloads];
     });
 
-    unlistenDownloadRemoved = await listen('download_removed', (event: any) => {
+    unlistenDownloadRemoved = await listen("download_removed", (event: any) => {
       const id = event.payload;
-      downloads = downloads.filter(d => d.id !== id);
+      downloads = downloads.filter((d) => d.id !== id);
     });
-  
   });
 
   onDestroy(() => {
     if (unlistenTaskUpdated) unlistenTaskUpdated();
     if (unlistenDownloadRemoved) unlistenDownloadRemoved();
-    
-  
-  
-    document.removeEventListener('click', handleGlobalClick, { capture: true });
-    document.removeEventListener('contextmenu', handleGlobalRightClick, { capture: true });
-    document.removeEventListener('keydown', handleContextMenuKeyDown);
+
+    document.removeEventListener("click", handleGlobalClick, { capture: true });
+    document.removeEventListener("contextmenu", handleGlobalRightClick, {
+      capture: true,
+    });
+    document.removeEventListener("keydown", handleContextMenuKeyDown);
   });
 
-
   $: if (contextMenu && contextMenuRef) {
-    document.addEventListener('click', handleGlobalClick, { capture: true });
-    document.addEventListener('contextmenu', handleGlobalRightClick, { capture: true });
-    document.addEventListener('keydown', handleContextMenuKeyDown);
-    
-  
-    const firstButton = contextMenuRef.querySelector('button[role="menuitem"]') as HTMLElement;
+    document.addEventListener("click", handleGlobalClick, { capture: true });
+    document.addEventListener("contextmenu", handleGlobalRightClick, {
+      capture: true,
+    });
+    document.addEventListener("keydown", handleContextMenuKeyDown);
+
+    const firstButton = contextMenuRef.querySelector(
+      'button[role="menuitem"]',
+    ) as HTMLElement;
     if (firstButton) {
       firstButton.focus();
     }
   } else if (!contextMenu) {
-    document.removeEventListener('click', handleGlobalClick, { capture: true });
-    document.removeEventListener('contextmenu', handleGlobalRightClick, { capture: true });
-    document.removeEventListener('keydown', handleContextMenuKeyDown);
+    document.removeEventListener("click", handleGlobalClick, { capture: true });
+    document.removeEventListener("contextmenu", handleGlobalRightClick, {
+      capture: true,
+    });
+    document.removeEventListener("keydown", handleContextMenuKeyDown);
     if (previouslyFocusedElement) {
       previouslyFocusedElement.focus();
       previouslyFocusedElement = null;
     }
   }
 
-
   async function loadDownloads() {
     try {
-      downloads = await invoke<Download[]>('get_all_downloads');
+      downloads = await invoke<Download[]>("get_all_downloads");
     } catch (error) {
-      console.error('Failed to load downloads:', error);
+      console.error("Failed to load downloads:", error);
     }
   }
 
-
   async function pauseDownload(id: string) {
     try {
-      await invoke('pause_download', { id });
+      await invoke("pause_download", { id });
     } catch (error) {
-      console.error('Failed to pause download:', error);
+      console.error("Failed to pause download:", error);
     }
   }
 
   async function resumeDownload(id: string) {
     try {
-      await invoke('resume_download', { id });
+      await invoke("resume_download", { id });
     } catch (error) {
-      console.error('Failed to resume download:', error);
+      console.error("Failed to resume download:", error);
     }
   }
 
   async function cancelDownload(id: string) {
-    if (confirm('Are you sure you want to cancel this download?')) {
+    if (confirm("Are you sure you want to cancel this download?")) {
       try {
-        await invoke('cancel_download', { id });
+        await invoke("cancel_download", { id });
       } catch (error) {
-        console.error('Failed to cancel download:', error);
+        console.error("Failed to cancel download:", error);
       }
     }
   }
 
   async function openFile(savePath: string, fileName: string) {
     try {
-      await invoke('open_file', { savePath, fileName });
+      await invoke("open_file", { savePath, fileName });
     } catch (error) {
-      console.error('Failed to open file:', error);
+      console.error("Failed to open file:", error);
     }
   }
 
   async function openFolder(path: string) {
     try {
-      await invoke('open_folder', { path });
+      await invoke("open_folder", { path });
     } catch (error) {
-      console.error('Failed to open folder:', error);
+      console.error("Failed to open folder:", error);
     }
   }
 
   async function removeDownloadFromList(id: string) {
-    if (confirm('Remove this download from the list?')) {
+    if (confirm("Remove this download from the list?")) {
       try {
-        await invoke('remove_download', { id });
-      
+        await invoke("remove_download", { id });
       } catch (error) {
-        console.error('Failed to remove download:', error);
+        console.error("Failed to remove download:", error);
       }
     }
   }
 
   async function deleteDownloadAndFile(id: string) {
-    if (confirm('Delete this download and its file? This cannot be undone.')) {
+    if (confirm("Delete this download and its file? This cannot be undone.")) {
       try {
-        await invoke('delete_download_with_file', { id });
-      
+        await invoke("delete_download_with_file", { id });
       } catch (error) {
-        console.error('Failed to delete download:', error);
+        console.error("Failed to delete download:", error);
       }
     }
   }
 
-
   function formatBytes(bytes: number): string {
-    if (!bytes || bytes <= 0) return '0 B';
+    if (!bytes || bytes <= 0) return "Unknown or 0 B (surely)";
     const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const sizes = ["B", "KB", "MB", "GB", "TB"];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   }
 
   function formatSpeed(bytesPerSecond: number): string {
-    if (!bytesPerSecond || bytesPerSecond <= 0) return '0 B/s';
-    return formatBytes(bytesPerSecond) + '/s';
+    if (!bytesPerSecond || bytesPerSecond <= 0) return "0 B/s (possibly)";
+    return formatBytes(bytesPerSecond) + "/s";
   }
 
   function formatTime(seconds: number | null): string {
-    if (seconds === null || seconds <= 0 || !isFinite(seconds)) return '∞';
-    if (seconds > 86400 * 30) return '>30d'; 
+    if (seconds === null || seconds <= 0 || !isFinite(seconds))
+      return "∞ (most definitely)";
+    if (seconds > 86400 * 30) return ">30d";
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     const secs = Math.floor(seconds % 60);
@@ -198,52 +207,72 @@
     return `${secs}s`;
   }
 
-  function getStatusIcon(status: Download['status']): string {
+  function getStatusIcon(status: Download["status"]): string {
     switch (status) {
-      case 'downloading': return '⬇️';
-      case 'paused': return '⏸️';
-      case 'completed': return '✅';
-      case 'failed': return '❌';
-      case 'queued': return '⏳';
-      case 'verifying': return '🔍';
-      case 'retrying': return '🔄';
-      default: return '❓';
+      case "downloading":
+        return "⬇️";
+      case "paused":
+        return "⏸️";
+      case "completed":
+        return "✅";
+      case "failed":
+        return "❌";
+      case "queued":
+        return "⏳";
+      case "verifying":
+        return "🔍";
+      case "retrying":
+        return "🔄";
+      default:
+        return "❓";
     }
   }
 
-  function getStatusColor(status: Download['status']): string {
+  function getStatusColor(status: Download["status"]): string {
     switch (status) {
-      case 'downloading': return '#4CAF50';
-      case 'paused': return '#FF9800';
-      case 'completed': return '#2196F3';
-      case 'failed': return '#f44336';
-      case 'queued': return '#9E9E9E';
-      case 'verifying': return '#9C27B0';
-      case 'retrying': return '#FFC107';
-      default: return '#757575';
+      case "downloading":
+        return "#4CAF50";
+      case "paused":
+        return "#FF9800";
+      case "completed":
+        return "#2196F3";
+      case "failed":
+        return "#f44336";
+      case "queued":
+        return "#9E9E9E";
+      case "verifying":
+        return "#9C27B0";
+      case "retrying":
+        return "#FFC107";
+      default:
+        return "#757575";
     }
   }
 
-
-  function showContextMenu(event: MouseEvent | KeyboardEvent, downloadId: string) {
+  function showContextMenu(
+    event: MouseEvent | KeyboardEvent,
+    downloadId: string,
+  ) {
     event.preventDefault();
-    
+
     if (event.currentTarget instanceof HTMLElement) {
-        previouslyFocusedElement = event.currentTarget;
+      previouslyFocusedElement = event.currentTarget;
     }
 
     let x: number, y: number;
-    if (event instanceof KeyboardEvent && event.currentTarget instanceof HTMLElement) {
-        const rect = event.currentTarget.getBoundingClientRect();
-        x = rect.left;
-        y = rect.bottom;
+    if (
+      event instanceof KeyboardEvent &&
+      event.currentTarget instanceof HTMLElement
+    ) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      x = rect.left;
+      y = rect.bottom;
     } else if (event instanceof MouseEvent) {
-        x = event.clientX;
-        y = event.clientY;
+      x = event.clientX;
+      y = event.clientY;
     } else {
-      
-        x = window.innerWidth / 2;
-        y = window.innerHeight / 2;
+      x = window.innerWidth / 2;
+      y = window.innerHeight / 2;
     }
 
     contextMenu = { x, y, downloadId };
@@ -254,51 +283,60 @@
   }
 
   function handleDownloadItemKeyDown(event: KeyboardEvent, downloadId: string) {
-    if (event.key === 'Enter' || event.key === ' ') {
+    if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       showContextMenu(event, downloadId);
     }
-    if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+    if (
+      event.key === "ContextMenu" ||
+      (event.shiftKey && event.key === "F10")
+    ) {
       event.preventDefault();
       showContextMenu(event, downloadId);
     }
   }
-
 
   function handleGlobalClick(event: MouseEvent) {
     if (contextMenuRef && !contextMenuRef.contains(event.target as Node)) {
       hideContextMenu();
     }
   }
-  
+
   function handleGlobalRightClick(event: MouseEvent) {
-  
-  
-  
     if (contextMenuRef && !contextMenuRef.contains(event.target as Node)) {
       hideContextMenu();
     }
-  
   }
 
   function handleContextMenuKeyDown(event: KeyboardEvent) {
-    if (event.key === 'Escape') {
+    if (event.key === "Escape") {
       event.preventDefault();
       hideContextMenu();
     }
-  
   }
-
 </script>
 
 <section>
   <div class="controls">
     <div class="filters">
-      <button class:active={filter === 'all'} on:click={() => filter = 'all'}>All</button>
-      <button class:active={filter === 'active'} on:click={() => filter = 'active'}>Active</button>
-      <button class:active={filter === 'completed'} on:click={() => filter = 'completed'}>Completed</button>
+      <button class:active={filter === "all"} on:click={() => (filter = "all")}
+        >All</button
+      >
+      <button
+        class:active={filter === "active"}
+        on:click={() => (filter = "active")}>Active</button
+      >
+      <button
+        class:active={filter === "completed"}
+        on:click={() => (filter = "completed")}>Completed</button
+      >
     </div>
-    <input type="search" bind:value={searchQuery} placeholder="Search downloads..." class="search-input" />
+    <input
+      type="search"
+      bind:value={searchQuery}
+      placeholder="Search downloads..."
+      class="search-input"
+    />
   </div>
 
   <div class="downloads-list">
@@ -309,9 +347,9 @@
       </div>
     {:else}
       {#each filteredDownloads as download (download.id)}
-        <div 
-          class="download-item" 
-          style="--status-color: {getStatusColor(download.status)}" 
+        <div
+          class="download-item"
+          style="--status-color: {getStatusColor(download.status)}"
           on:contextmenu={(e) => showContextMenu(e, download.id)}
           on:keydown={(e) => handleDownloadItemKeyDown(e, download.id)}
           role="button"
@@ -326,41 +364,63 @@
                 <h3 class="file-name">{download.fileName}</h3>
                 <p class="file-details">
                   {download.fileType} • {formatBytes(download.totalSize)}
-                  {#if download.status === 'downloading'}
-                    • {formatSpeed(download.speed)} • {formatTime(download.timeRemaining)}
+                  {#if download.status === "downloading"}
+                    • {formatSpeed(download.speed)} • {formatTime(
+                      download.timeRemaining,
+                    )}
                   {/if}
                 </p>
               </div>
             </div>
-            
+
             <div class="actions">
-              {#if download.status === 'downloading'}
-                <button on:click|stopPropagation={() => pauseDownload(download.id)} title="Pause">⏸️</button>
-              {:else if (download.status === 'paused' || download.status === 'failed') && download.resumeCapability}
-                <button on:click|stopPropagation={() => resumeDownload(download.id)} title="Resume">▶️</button>
+              {#if download.status === "downloading"}
+                <button
+                  on:click|stopPropagation={() => pauseDownload(download.id)}
+                  title="Pause">⏸️</button
+                >
+              {:else if (download.status === "paused" || download.status === "failed") && download.resumeCapability}
+                <button
+                  on:click|stopPropagation={() => resumeDownload(download.id)}
+                  title="Resume">▶️</button
+                >
               {/if}
-              
-              {#if download.status === 'completed'}
-                <button on:click|stopPropagation={() => openFile(download.savePath, download.fileName)} title="Open File">📄</button>
+
+              {#if download.status === "completed"}
+                <button
+                  on:click|stopPropagation={() =>
+                    openFile(download.savePath, download.fileName)}
+                  title="Open File">📄</button
+                >
               {/if}
-              
-              <button on:click|stopPropagation={() => openFolder(download.savePath)} title="Open Folder">📁</button>
-              
-              {#if download.status !== 'completed'}
-                <button on:click|stopPropagation={() => cancelDownload(download.id)} title="Cancel" class="cancel-btn">❌</button>
+
+              <button
+                on:click|stopPropagation={() => openFolder(download.savePath)}
+                title="Open Folder">📁</button
+              >
+
+              {#if download.status !== "completed"}
+                <button
+                  on:click|stopPropagation={() => cancelDownload(download.id)}
+                  title="Cancel"
+                  class="cancel-btn">❌</button
+                >
               {/if}
             </div>
           </div>
-          
-          {#if ['downloading', 'paused', 'verifying', 'retrying'].includes(download.status)}
+
+          {#if ["downloading", "paused", "verifying", "retrying"].includes(download.status)}
             <div class="progress-container">
               <div class="progress-bar">
-                <div class="progress-fill" style="width: {download.progress}%"></div>
+                <div
+                  class="progress-fill"
+                  style="width: {download.progress}%"
+                ></div>
               </div>
               <span class="progress-text">{download.progress.toFixed(1)}%</span>
             </div>
           {/if}
-          
+
           {#if download.errorMessage}
             <p class="error-message">{download.errorMessage}</p>
           {/if}
@@ -371,37 +431,69 @@
 
   <!-- Context Menu -->
   {#if contextMenu}
-    {@const selectedDownload = downloads.find(d => d.id === contextMenu!.downloadId)}
+    {@const selectedDownload = downloads.find(
+      (d) => d.id === contextMenu!.downloadId,
+    )}
     {#if selectedDownload}
-      <div 
+      <div
         bind:this={contextMenuRef}
-        class="context-menu" 
+        class="context-menu"
         style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
         role="menu"
         aria-label={`Actions for ${selectedDownload.fileName}`}
       >
-        {#if selectedDownload.status === 'completed'}
-          <button role="menuitem" on:click={() => { openFile(selectedDownload.savePath, selectedDownload.fileName); hideContextMenu(); }}>
+        {#if selectedDownload.status === "completed"}
+          <button
+            role="menuitem"
+            on:click={() => {
+              openFile(selectedDownload.savePath, selectedDownload.fileName);
+              hideContextMenu();
+            }}
+          >
             📄 Open File
           </button>
         {/if}
-        <button role="menuitem" on:click={() => { openFolder(selectedDownload.savePath || ''); hideContextMenu(); }}>
+        <button
+          role="menuitem"
+          on:click={() => {
+            openFolder(selectedDownload.savePath || "");
+            hideContextMenu();
+          }}
+        >
           📁 Open Folder
         </button>
         <hr />
-        <button role="menuitem" on:click={() => { removeDownloadFromList(selectedDownload.id); hideContextMenu(); }}>
+        <button
+          role="menuitem"
+          on:click={() => {
+            removeDownloadFromList(selectedDownload.id);
+            hideContextMenu();
+          }}
+        >
           🗑️ Remove from List
         </button>
-        <button role="menuitem" on:click={() => { deleteDownloadAndFile(selectedDownload.id); hideContextMenu(); }} class="danger">
+        <button
+          role="menuitem"
+          on:click={() => {
+            deleteDownloadAndFile(selectedDownload.id);
+            hideContextMenu();
+          }}
+          class="danger"
+        >
           ❌ Delete with File
         </button>
       </div>
     {:else}
       <!-- Fallback if download not found, should ideally not happen -->
-      <div class="context-menu" style="left: {contextMenu.x}px; top: {contextMenu.y}px; border: 1px solid red; padding: 5px;">
+      <div
+        class="context-menu"
+        style="left: {contextMenu.x}px; top: {contextMenu.y}px; border: 1px solid red; padding: 5px;"
+      >
         Error: Download not found.
       </div>
-      <script>console.error("Context menu error: Download ID not found"")</script>
+      <script>
+console.error("Context menu error: Download ID not found"")
+      </script>
       {@debug contextMenu, downloads}
     {/if}
   {/if}
@@ -409,7 +501,7 @@
 
 <style>
   .download-item:focus {
-    outline: 2px solid var(--status-color, #4CAF50);
+    outline: 2px solid var(--status-color, #4caf50);
     outline-offset: 2px;
   }
 
@@ -418,7 +510,7 @@
     background: #3a3a3a;
     border: 1px solid #555;
     border-radius: 4px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
     padding: 0.5rem 0;
     z-index: 1000;
     min-width: 200px;
@@ -437,7 +529,7 @@
   }
   .context-menu button[role="menuitem"]:hover,
   .context-menu button[role="menuitem"]:focus {
-    background-color: #4CAF50;
+    background-color: #4caf50;
     color: #fff;
     outline: none;
   }
@@ -489,8 +581,8 @@
   }
 
   .filters button.active {
-    background: #4CAF50;
-    border-color: #4CAF50;
+    background: #4caf50;
+    border-color: #4caf50;
   }
 
   .search-input {
@@ -516,7 +608,7 @@
   }
 
   .add-link {
-    color: #4CAF50;
+    color: #4caf50;
     text-decoration: none;
     margin-top: 1rem;
     display: inline-block;
@@ -536,9 +628,8 @@
     transition: box-shadow 0.2s ease-in-out;
   }
   .download-item:hover {
-      box-shadow: 0 0 8px rgba(var(--status-color, #757575), 0.5);
+    box-shadow: 0 0 8px rgba(var(--status-color, #757575), 0.5);
   }
-
 
   .download-header {
     display: flex;
@@ -628,7 +719,7 @@
 
   .progress-fill {
     height: 100%;
-    background-color: var(--status-color, #4CAF50);
+    background-color: var(--status-color, #4caf50);
     transition: width 0.3s ease;
     border-radius: 4px;
   }

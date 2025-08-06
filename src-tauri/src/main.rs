@@ -2,8 +2,8 @@
 
 use chrono::{DateTime, Local};
 use futures::StreamExt;
-use reqwest::cookie::Jar;
 use reqwest::Client;
+use reqwest::cookie::Jar;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -14,8 +14,8 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 use tauri_plugin_notification::NotificationExt;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::oneshot;
 use tokio::sync::Mutex;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 use tokio::time::{Duration, Instant};
 use url::Url;
@@ -247,7 +247,6 @@ async fn choose_download_folder(app_handle: AppHandle) -> Result<String, String>
     }
 }
 
-// This command now correctly receives the final URL from the info-fetch step
 #[tauri::command]
 async fn add_download(
     payload: AddDownloadPayload,
@@ -265,6 +264,11 @@ async fn add_download(
         )
     };
     let save_path = payload.custom_path.unwrap_or(default_save_path);
+
+    //noteit: Use the total_size from payload if available, otherwise keep it as 0
+    // The actual size will be updated when the download starts
+    let total_size = payload.total_size.unwrap_or(0);
+
     let new_task = DownloadTask {
         id: id.clone(),
         url: payload.url,
@@ -272,7 +276,7 @@ async fn add_download(
         progress: 0.0,
         file_name: payload.file_name,
         save_path,
-        total_size: payload.total_size.unwrap_or(0),
+        total_size,
         downloaded_size: 0,
         speed: 0,
         time_remaining: None,
@@ -282,8 +286,9 @@ async fn add_download(
         completed_at: None,
         file_type,
         connections: max_connections,
-        resume_attempts: 0, // NEW: Initialize to 0
+        resume_attempts: 0,
     };
+
     state
         .persistent
         .lock()
@@ -294,9 +299,11 @@ async fn add_download(
         .await
         .map_err(|e| e.to_string())?;
     app_handle.emit("task_updated", &new_task).unwrap();
+
     if auto_start {
         start_download_task(id, app_handle.clone()).await?;
     }
+
     Ok(new_task)
 }
 
@@ -573,7 +580,7 @@ async fn download_file(
                     "Failed to connect after {} attempts: {}",
                     max_attempts,
                     e
-                ))
+                ));
             }
             Err(_) => {
                 if attempts < max_attempts {
@@ -618,7 +625,9 @@ async fn download_file(
         let state: State<AppState> = app_handle.state();
         let mut state_guard = state.persistent.lock().await;
         if let Some(task) = state_guard.downloads.iter_mut().find(|t| t.id == id) {
-            task.total_size = total_size;
+            if task.total_size == 0 && total_size > 0 {
+                task.total_size = total_size;
+            }
             task.resume_capability = resume_capability;
             app_handle.emit("task_updated", &*task).unwrap();
         }
