@@ -1,4 +1,3 @@
-<!-- src/lib/Header.svelte -->
 <header>
   <h1>VeloDown</h1>
   <nav>

@@ -1,7 +1,6 @@
-<!-- src/routes/+layout.svelte -->
 <script lang="ts">
-  import Header from '../lib/Header.svelte';
-  import '../app.css';
+  import Header from "../lib/Header.svelte";
+  import "../app.css";
 </script>
 
 <main class="container">
