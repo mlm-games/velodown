@@ -7,12 +7,12 @@ use reqwest::cookie::Jar;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::Arc;
 use tauri::Emitter;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_opener::OpenerExt;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
@@ -388,67 +388,37 @@ async fn cancel_download(
 }
 
 #[tauri::command]
-async fn open_file(save_path: String, file_name: String) -> Result<(), String> {
-    // Let Rust's PathBuf handle joining paths correctly for any OS
+async fn open_file(
+    app_handle: AppHandle,
+    save_path: String,
+    file_name: String,
+) -> Result<(), String> {
     let full_path = PathBuf::from(&save_path).join(&file_name);
-
     if !full_path.exists() {
         return Err("File not found".to_string());
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        Command::new("explorer")
-            .arg(&full_path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        Command::new("open")
-            .arg(&full_path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        Command::new("xdg-open")
-            .arg(&full_path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-
+    app_handle
+        .opener()
+        .open_path(full_path.to_string_lossy(), None::<&str>)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
+
 #[tauri::command]
-async fn open_folder(path: String) -> Result<(), String> {
+async fn open_folder(app_handle: AppHandle, path: String) -> Result<(), String> {
     let folder_path = PathBuf::from(&path);
     if !folder_path.exists() {
         return Err("Folder not found".to_string());
     }
-    #[cfg(target_os = "windows")]
-    {
-        Command::new("explorer")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        Command::new("open")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        Command::new("xdg-open")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
+
+    app_handle
+        .opener()
+        .open_path(folder_path.to_string_lossy(), None::<&str>)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
+
 async fn start_download_task(id: String, app_handle: AppHandle) -> Result<(), String> {
     let app_handle_clone = app_handle.clone();
     let id_clone = id.clone();
