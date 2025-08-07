@@ -1,3 +1,21 @@
+## v0.3.3
+
+- change frontenddist to correct loc by @mlm-games
+- Update release notes for v0.3.2 by @GitHub Actions
+- Update release.yml by @ragebreaker
+- Update release notes for v0.3.1 by @GitHub Actions
+- rem some ai comments by @mlm-games
+- Set the timeout to 24 hours instead by @mlm-games
+- use plugin for opening files by @mlm-games
+- fix cancel button popup, and prob. should rm "remove all lists" popup by @mlm-games
+- add a total_size param to show proper size even after restarting by @mlm-games
+- some minor changes (mostly spacing diffs) by @mlm-games
+- cargo lock ? by @mlm-studios
+- Add the license by @mlm-studios
+- Update aur-publish.yml to use similar format by @ragebreaker
+- Update release.yml to add other stores support by @ragebreaker
+
+
 ## v0.3.2
 
 - Update release.yml by @ragebreaker
