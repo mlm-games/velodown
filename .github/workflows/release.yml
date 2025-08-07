@@ -34,7 +34,7 @@ on:
       publish_to_aur:
         description: 'Publish to AUR'
         required: false
-        default: 'false'
+        default: 'true'
         type: boolean
       publish_to_snap:
         description: 'Publish to Snapcraft'
