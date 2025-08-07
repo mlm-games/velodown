@@ -54,12 +54,13 @@ jobs:
           else
             echo "pkgrel=1" >> $GITHUB_OUTPUT
           fi
+
       
       - name: Create PKGBUILD
         run: |
           mkdir -p aur-package
           cat > aur-package/PKGBUILD << 'EOF'
-          # Maintainer: MLM Games <contact@mlmgames.com>
+          # Maintainer: MLM-stuff <gfxoxinzh@mozmail.com>
           pkgname=velodown-bin
           pkgver=${{ inputs.version_name }}
           pkgrel=${{ steps.pkgrel.outputs.pkgrel }}
@@ -72,15 +73,23 @@ jobs:
           provides=('velodown')
           conflicts=('velodown')
           options=('!strip' '!emptydirs')
-          source_x86_64=("velodown-${pkgver}.AppImage::https://github.com/mlm-games/velodown/releases/download/v${pkgver}/velodown_${pkgver}_amd64.AppImage"
-                         "velodown.desktop")
-          sha256sums_x86_64=('${{ steps.checksums.outputs.appimage_hash }}'
-                             'SKIP')
+          # source=("https://raw.githubusercontent.com/mlm-games/velodown/refs/heads/main/fastlane/metadata/android/en-US/images/icon.png")
+           source_x86_64=("velodown-${pkgver}.AppImage::https://github.com/mlm-games/velodown/releases/download/v${pkgver}/velodown_${pkgver}_amd64.AppImage")
+          sha256sums_x86_64=('${{ steps.checksums.outputs.appimage_hash }}')
           noextract=("velodown-${pkgver}.AppImage")
           
-          prepare() {
-              # Create desktop file
-              cat > "${srcdir}/velodown.desktop" << DESKTOP_EOF
+          package() {
+              # install -d "${pkgdir}/usr/bin/"
+              # install -d "${pkgdir}/usr/share/applications/"
+              # install -d "${pkgdir}/usr/share/pixmaps/"
+              # install -d "${pkgdir}/opt/${pkgname}/"
+              # install -Dm755 "$srcdir/velodown-${{ inputs.version_name }}-x64" "${pkgdir}/opt/${pkgname}/velodown"
+          
+              # ln -s "/opt/${pkgname}/velodown" "${pkgdir}/usr/bin/velodown"
+              
+              # install -Dm644 "$srcdir/icon.png" "${pkgdir}/usr/share/pixmaps/velodown.png"
+          
+              cat > "${pkgdir}/usr/share/applications/velodown.desktop" << DESKTOP_EOF
           [Desktop Entry]
           Name=VeloDown
           Comment=A blazing-fast download manager built with Rust and Tauri
@@ -145,40 +154,12 @@ jobs:
           }
           EOF
       
-      - name: Create .SRCINFO
-        run: |
-          cd aur-package
-          cat > .SRCINFO << 'EOF'
-          pkgbase = velodown-bin
-          	pkgdesc = A blazing-fast download manager built with Rust and Tauri
-          	pkgver = ${{ inputs.version_name }}
-          	pkgrel = ${{ steps.pkgrel.outputs.pkgrel }}
-          	url = https://github.com/mlm-games/velodown
-          	arch = x86_64
-          	license = MIT
-          	depends = webkit2gtk
-          	depends = gtk3
-          	depends = libayatana-appindicator
-          	optdepends = libnotify: for desktop notifications
-          	provides = velodown
-          	conflicts = velodown
-          	noextract = velodown-${{ inputs.version_name }}.AppImage
-          	options = !strip
-          	options = !emptydirs
-          	source_x86_64 = velodown-${{ inputs.version_name }}.AppImage::https://github.com/mlm-games/velodown/releases/download/v${{ inputs.version_name }}/velodown_${{ inputs.version_name }}_amd64.AppImage
-          	source_x86_64 = velodown.desktop
-          	sha256sums_x86_64 = ${{ steps.checksums.outputs.appimage_hash }}
-          	sha256sums_x86_64 = SKIP
-          
-          pkgname = velodown-bin
-          EOF
-      
       - name: Publish to AUR
         uses: KSXGitHub/github-actions-deploy-aur@master
         with:
           pkgname: velodown-bin
           pkgbuild: aur-package/PKGBUILD
-          commit_username: ${{ github.actor }}
-          commit_email: ${{ github.actor }}@users.noreply.github.com
+          commit_username: MLM-stuff
+          commit_email: gfxoxinzh@mozmail.com
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           commit_message: "Update to version ${{ inputs.version_name }}-${{ steps.pkgrel.outputs.pkgrel }}"
