@@ -35,7 +35,7 @@
   let contextMenu = $state<{ x: number; y: number; downloadId: string } | null>(
     null,
   );
-  let contextMenuRef: HTMLDivElement;
+  let contextMenuRef = $state<HTMLDivElement | undefined>();
   let previouslyFocusedElement: HTMLElement | null = null;
 
   let filteredDownloads = $derived(
