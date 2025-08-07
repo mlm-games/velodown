@@ -1,9 +1,7 @@
-<!-- svelte-ignore event_directive_deprecated -->
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { error } from "@sveltejs/kit";
-  import { onDestroy } from "svelte";
 
   interface Download {
     id: string;
@@ -304,16 +302,16 @@
 <section>
   <div class="controls">
     <div class="filters">
-      <button class:active={filter === "all"} on:click={() => (filter = "all")}
+      <button class:active={filter === "all"} onclick={() => (filter = "all")}
         >All</button
       >
       <button
         class:active={filter === "active"}
-        on:click={() => (filter = "active")}>Active</button
+        onclick={() => (filter = "active")}>Active</button
       >
       <button
         class:active={filter === "completed"}
-        on:click={() => (filter = "completed")}>Completed</button
+        onclick={() => (filter = "completed")}>Completed</button
       >
     </div>
     <input
@@ -335,8 +333,8 @@
         <div
           class="download-item"
           style="--status-color: {getStatusColor(download.status)}"
-          on:contextmenu={(e) => showContextMenu(e, download.id)}
-          on:keydown={(e) => handleDownloadItemKeyDown(e, download.id)}
+          oncontextmenu={(e) => showContextMenu(e, download.id)}
+          onkeydown={(e) => handleDownloadItemKeyDown(e, download.id)}
           role="button"
           tabindex="0"
           aria-haspopup="menu"
@@ -361,32 +359,46 @@
             <div class="actions">
               {#if download.status === "downloading"}
                 <button
-                  on:click|stopPropagation={() => pauseDownload(download.id)}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    pauseDownload(download.id);
+                  }}
                   title="Pause">⏸️</button
                 >
               {:else if (download.status === "paused" || download.status === "failed" || download.status == "cancelled") && download.resumeCapability}
                 <button
-                  on:click|stopPropagation={() => resumeDownload(download.id)}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    resumeDownload(download.id);
+                  }}
                   title="Resume">▶️</button
                 >
               {/if}
 
               {#if download.status === "completed"}
                 <button
-                  on:click|stopPropagation={() =>
-                    openFile(download.savePath, download.fileName)}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    openFile(download.savePath, download.fileName);
+                  }}
                   title="Open File">📄</button
                 >
               {/if}
 
               <button
-                on:click|stopPropagation={() => openFolder(download.savePath)}
+                onclick={(e) => {
+                  e.stopPropagation();
+                  openFolder(download.savePath);
+                }}
                 title="Open Folder">📁</button
               >
 
               {#if download.status !== "completed" && download.status !== "cancelled"}
                 <button
-                  on:click|stopPropagation={() => cancelDownload(download.id)}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    cancelDownload(download.id);
+                  }}
                   title="Cancel"
                   class="cancel-btn">❌</button
                 >
@@ -430,7 +442,7 @@
         {#if selectedDownload.status === "completed"}
           <button
             role="menuitem"
-            on:click={() => {
+            onclick={() => {
               openFile(selectedDownload.savePath, selectedDownload.fileName);
               hideContextMenu();
             }}
@@ -440,7 +452,7 @@
         {/if}
         <button
           role="menuitem"
-          on:click={() => {
+          onclick={() => {
             openFolder(selectedDownload.savePath || "");
             hideContextMenu();
           }}
@@ -450,7 +462,7 @@
         <hr />
         <button
           role="menuitem"
-          on:click={() => {
+          onclick={() => {
             removeDownloadFromList(selectedDownload.id);
             hideContextMenu();
           }}
@@ -459,7 +471,7 @@
         </button>
         <button
           role="menuitem"
-          on:click={() => {
+          onclick={() => {
             deleteDownloadAndFile(selectedDownload.id);
             hideContextMenu();
           }}
