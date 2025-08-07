@@ -1,3 +1,40 @@
+## v0.3.9
+
+- minor warn rm by @mlm-games
+-  rune changes by @mlm-games
+- maybe this will work by @mlm-games
+- use runes just coz by @mlm-games
+- fix minor prob by @mlm-games
+- try with initialisation param by @mlm-games
+- back and forth, works locally, can't tell the problem from tuari-action by @mlm-games
+- Update release notes for v0.3.7 by @GitHub Actions
+- use old path by @mlm-games
+- Update release.yml by @ragebreaker
+- rm lock files by @mlm-games
+- add lock files to gitignore by @mlm-games
+- Update release notes for v0.3.6 by @GitHub Actions
+- cargo.lock doesn't exist by @mlm-games
+- Update release notes for v0.3.5 by @GitHub Actions
+- try with the cmd by @mlm-games
+- Update release notes for v0.3.4 by @GitHub Actions
+- use correct dist loc by @mlm-games
+- Update release notes for v0.3.3 by @GitHub Actions
+- change frontenddist to correct loc by @mlm-games
+- Update release notes for v0.3.2 by @GitHub Actions
+- Update release.yml by @ragebreaker
+- Update release notes for v0.3.1 by @GitHub Actions
+- rem some ai comments by @mlm-games
+- Set the timeout to 24 hours instead by @mlm-games
+- use plugin for opening files by @mlm-games
+- fix cancel button popup, and prob. should rm "remove all lists" popup by @mlm-games
+- add a total_size param to show proper size even after restarting by @mlm-games
+- some minor changes (mostly spacing diffs) by @mlm-games
+- cargo lock ? by @mlm-studios
+- Add the license by @mlm-studios
+- Update aur-publish.yml to use similar format by @ragebreaker
+- Update release.yml to add other stores support by @ragebreaker
+
+
 
 ## v0.2.12
 
