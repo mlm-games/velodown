@@ -535,10 +535,9 @@ async fn download_file(
     resume_from: u64,
     app_handle: &AppHandle,
 ) -> anyhow::Result<()> {
-    // Create a more robust client with better timeout settings
     let client = Client::builder()
         .user_agent(USER_AGENT)
-        .timeout(Duration::from_secs(86400)) // Timeouts is set for chunks instead below
+        .timeout(Duration::from_secs(86400))
         .connect_timeout(Duration::from_secs(30))
         .pool_idle_timeout(Duration::from_secs(90))
         .pool_max_idle_per_host(10)
