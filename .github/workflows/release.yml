@@ -110,7 +110,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: release
           
       - name: Pull latest changes
         run: git pull
@@ -347,7 +347,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: main
+          ref: release
           
       - name: Download Linux build
         uses: actions/download-artifact@v4
@@ -405,7 +405,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'aur-publish.yml',
-              ref: 'main',
+              ref: 'release',
               inputs: {
                 version_name: '${{ inputs.version_name }}',
                 increment_pkgrel: 'false'
