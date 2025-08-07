@@ -89,7 +89,7 @@ jobs:
               
               # install -Dm644 "$srcdir/icon.png" "${pkgdir}/usr/share/pixmaps/velodown.png"
           
-              cat > "${pkgdir}/usr/share/applications/velodown.desktop" << DESKTOP_EOF
+              cat > "${srcdir}/velodown.desktop" << DESKTOP_EOF
           [Desktop Entry]
           Name=VeloDown
           Comment=A blazing-fast download manager built with Rust and Tauri
