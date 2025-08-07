@@ -1,30 +1,32 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { goto } from "$app/navigation";
-  import { onMount } from "svelte";
 
-  let url = "";
-  let customPath = "";
-
-  let downloadInfo: {
+  let url = $state("");
+  let customPath = $state("");
+  let downloadInfo = $state<{
     finalUrl: string;
     fileName: string;
     totalSize: number | null;
     fileType: string;
-  } | null = null;
-  let error = "";
-  let isLoading = false;
-  let defaultDownloadFolder = "...";
+  } | null>(null);
+  let error = $state("");
+  let isLoading = $state(false);
+  let defaultDownloadFolder = $state("...");
 
-  onMount(async () => {
-    try {
-      // NOTE: AppSettings struct uses snake_case, but the #[serde(rename_all = "camelCase")], means the frontend receives camelCase keys.
-      const settings = await invoke<{ downloadFolder: string }>("get_settings");
-      defaultDownloadFolder = settings.downloadFolder;
-    } catch (e) {
-      console.error("Could not load settings:", e);
-      defaultDownloadFolder = "Error loading path";
+  $effect(() => {
+    async function loadSettings() {
+      try {
+        const settings = await invoke<{ downloadFolder: string }>(
+          "get_settings",
+        );
+        defaultDownloadFolder = settings.downloadFolder;
+      } catch (e) {
+        console.error("Could not load settings:", e);
+        defaultDownloadFolder = "Error loading path";
+      }
     }
+    loadSettings();
   });
 
   function formatBytes(bytes: number | null): string {
@@ -114,12 +116,12 @@
         bind:value={url}
         class="url-input"
         placeholder="Enter or paste download URL..."
-        on:paste={handlePaste}
-        on:blur={fetchInfo}
+        onpaste={handlePaste}
+        onblur={fetchInfo}
         disabled={isLoading}
       />
       <button
-        on:click={fetchInfo}
+        onclick={fetchInfo}
         disabled={isLoading || !url}
         class="browse-btn"
       >
@@ -151,12 +153,12 @@
             class="path-input"
             placeholder="Default: {defaultDownloadFolder}"
           />
-          <button on:click={chooseFolder} class="browse-btn">...</button>
+          <button onclick={chooseFolder} class="browse-btn">...</button>
         </div>
       </div>
 
       <button
-        on:click={handleAddDownload}
+        onclick={handleAddDownload}
         disabled={isLoading}
         class="download-btn"
       >

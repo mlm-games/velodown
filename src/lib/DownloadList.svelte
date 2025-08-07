@@ -1,8 +1,9 @@
+<!-- svelte-ignore event_directive_deprecated -->
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { error } from "@sveltejs/kit";
+  import { onDestroy } from "svelte";
 
   interface Download {
     id: string;
@@ -30,88 +31,67 @@
     fileType: string;
     resumeAttempts: number;
   }
-
-  let downloads: Download[] = [];
-  let filter: "all" | "active" | "completed" = "all";
-  let searchQuery = "";
-  let unlistenTaskUpdated: (() => void) | undefined;
-  let unlistenDownloadRemoved: (() => void) | undefined;
-  let contextMenu: { x: number; y: number; downloadId: string } | null = null;
+  let downloads = $state<Download[]>([]);
+  let filter = $state<"all" | "active" | "completed">("all");
+  let searchQuery = $state("");
+  let contextMenu = $state<{ x: number; y: number; downloadId: string } | null>(
+    null,
+  );
   let contextMenuRef: HTMLDivElement;
   let previouslyFocusedElement: HTMLElement | null = null;
 
-  $: filteredDownloads = downloads.filter((d) => {
-    const matchesFilter =
-      filter === "all" ||
-      (filter === "active" &&
-        ["queued", "downloading", "paused", "verifying", "retrying"].includes(
-          d.status,
-        )) ||
-      (filter === "completed" && d.status === "completed");
+  let filteredDownloads = $derived(
+    downloads.filter((d) => {
+      const matchesFilter =
+        filter === "all" ||
+        (filter === "active" &&
+          ["queued", "downloading", "paused", "verifying", "retrying"].includes(
+            d.status,
+          )) ||
+        (filter === "completed" && d.status === "completed");
 
-    const matchesSearch =
-      searchQuery === "" ||
-      d.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      d.url.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesSearch =
+        searchQuery === "" ||
+        d.fileName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        d.url.toLowerCase().includes(searchQuery.toLowerCase());
 
-    return matchesFilter && matchesSearch;
-  });
+      return matchesFilter && matchesSearch;
+    }),
+  );
 
-  onMount(async () => {
-    await loadDownloads();
+  $effect(() => {
+    let unlistenTaskUpdated: (() => void) | undefined;
+    let unlistenDownloadRemoved: (() => void) | undefined;
 
-    unlistenTaskUpdated = await listen("task_updated", (event: any) => {
-      const updatedTask: Download = event.payload;
-      const index = downloads.findIndex((d) => d.id === updatedTask.id);
-      if (index !== -1) {
-        downloads[index] = updatedTask;
-      } else {
-        downloads = [updatedTask, ...downloads];
-      }
-      downloads = [...downloads];
-    });
+    async function setupListeners() {
+      await loadDownloads();
 
-    unlistenDownloadRemoved = await listen("download_removed", (event: any) => {
-      const id = event.payload;
-      downloads = downloads.filter((d) => d.id !== id);
-    });
-  });
+      unlistenTaskUpdated = await listen("task_updated", (event: any) => {
+        const updatedTask: Download = event.payload;
+        const index = downloads.findIndex((d) => d.id === updatedTask.id);
+        if (index !== -1) {
+          downloads[index] = updatedTask;
+        } else {
+          downloads.unshift(updatedTask);
+        }
+      });
 
-  onDestroy(() => {
-    if (unlistenTaskUpdated) unlistenTaskUpdated();
-    if (unlistenDownloadRemoved) unlistenDownloadRemoved();
-
-    document.removeEventListener("click", handleGlobalClick, { capture: true });
-    document.removeEventListener("contextmenu", handleGlobalRightClick, {
-      capture: true,
-    });
-    document.removeEventListener("keydown", handleContextMenuKeyDown);
-  });
-
-  $: if (contextMenu && contextMenuRef) {
-    document.addEventListener("click", handleGlobalClick, { capture: true });
-    document.addEventListener("contextmenu", handleGlobalRightClick, {
-      capture: true,
-    });
-    document.addEventListener("keydown", handleContextMenuKeyDown);
-
-    const firstButton = contextMenuRef.querySelector(
-      'button[role="menuitem"]',
-    ) as HTMLElement;
-    if (firstButton) {
-      firstButton.focus();
+      unlistenDownloadRemoved = await listen(
+        "download_removed",
+        (event: any) => {
+          const id = event.payload;
+          downloads = downloads.filter((d) => d.id !== id);
+        },
+      );
     }
-  } else if (!contextMenu) {
-    document.removeEventListener("click", handleGlobalClick, { capture: true });
-    document.removeEventListener("contextmenu", handleGlobalRightClick, {
-      capture: true,
-    });
-    document.removeEventListener("keydown", handleContextMenuKeyDown);
-    if (previouslyFocusedElement) {
-      previouslyFocusedElement.focus();
-      previouslyFocusedElement = null;
-    }
-  }
+
+    setupListeners();
+
+    return () => {
+      if (unlistenTaskUpdated) unlistenTaskUpdated();
+      if (unlistenDownloadRemoved) unlistenDownloadRemoved();
+    };
+  });
 
   async function loadDownloads() {
     try {
