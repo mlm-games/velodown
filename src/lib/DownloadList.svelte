@@ -497,7 +497,7 @@
         Error: Download not found.
       </div>
       <script>
-console.error("Context menu error: Download ID not found"")
+        console.error("Context menu error: Download ID not found");
       </script>
       {@debug contextMenu, downloads}
     {/if}
