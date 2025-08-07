@@ -154,7 +154,6 @@ jobs:
       - name: Generate SHA256 checksums
         shell: bash
         run: |
-          # Find the output directory
           if [ "${{ matrix.platform }}" == "windows-latest" ]; then
             BUNDLE_DIR="src-tauri/target/release/bundle"
             EXT="exe|msi"
@@ -162,8 +161,17 @@ jobs:
             BUNDLE_DIR="src-tauri/target/release/bundle"
             EXT="deb|AppImage"
           else
-            BUNDLE_DIR="src-tauri/target/release/bundle"
+            # macOS's universal target
+            BUNDLE_DIR="src-tauri/target/universal-apple-darwin/release/bundle"
             EXT="dmg|app"
+          fi
+
+          # Check if directory exists
+          if [ ! -d "$BUNDLE_DIR" ]; then
+            echo "Bundle directory not found: $BUNDLE_DIR"
+            echo "Searching for bundle directories..."
+            find src-tauri/target -name "bundle" -type d
+            exit 1
           fi
 
           # Create checksums file
@@ -185,7 +193,7 @@ jobs:
         with:
           name: ${{ matrix.artifact-name }}-build
           path: |
-            src-tauri/target/release/bundle/**/*
+            ${{ matrix.platform == 'macos-latest' && 'src-tauri/target/universal-apple-darwin/release/bundle/**/*' || 'src-tauri/target/release/bundle/**/*' }}
             SHA256SUMS.txt
 
   publish-chocolatey:
