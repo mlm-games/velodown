@@ -42,6 +42,13 @@ on:
         default: 'false'
         type: boolean
 
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   prepare-release:
     runs-on: ubuntu-latest
@@ -50,41 +57,56 @@ jobs:
     outputs:
       version: ${{ inputs.version_name }}
       release_notes: ${{ steps.generate_notes.outputs.release-notes }}
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # Need to checkout the branch that triggered this run so later job parts see the updated head
+          ref: ${{ github.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node (for npm version)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'npm'
+
+      - name: Install jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
 
       - name: Generate Release Notes
         id: generate_notes
         if: ${{ inputs.auto_generate_changelog == true }}
-        uses: mlm-games/release-notes-generator@v1.1.0
+        uses: mlm-games/release-notes-generator@v1
         with:
           version: ${{ inputs.version_name }}
           changelog-path: 'CHANGELOG.md'
           auto-commit: 'true'
-          exclude-patterns: 'chore(release),Merge pull request'
-          commit-message: 'Update release notes for v{{version}}'
+          exclude-patterns: 'chore:,ci:,docs:,Update release notes,Merge pull request'
+          commit-message: 'docs: update release notes for v{{version}} [skip ci]'
 
       - name: Update version files
         run: |
+          set -e
           echo "Bumping versions to ${{ inputs.version_name }}"
           # Update package.json
           npm version ${{ inputs.version_name }} --no-git-tag-version
           # Update tauri.conf.json using jq
           jq --arg new_version "${{ inputs.version_name }}" '.version = $new_version' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
-          # Update Cargo.toml version
-          sed -i "s/^version = .*/version = \"${{ inputs.version_name }}\"/" src-tauri/Cargo.toml
-          
+          # Update Cargo.toml version (package table)
+          sed -i '0,/^version = /s//version = "${{ inputs.version_name }}"/' src-tauri/Cargo.toml
+
       - name: Commit and push version changes
         run: |
+          set -e
           git config --global user.email "actions@github.com"
           git config --global user.name "GitHub Actions"
-          git add .
-          git commit -m "chore(release): Bump version to ${{ inputs.version_name }}"
+          git add -A
+          # Avoid failing if nothing changed
+          git commit -m "chore(release): bump version to ${{ inputs.version_name }}" || echo "No changes to commit"
           git push
 
   build-tauri:
@@ -105,20 +127,18 @@ jobs:
             args: ''
             artifact-name: 'Windows-x64'
     runs-on: ${{ matrix.platform }}
-    
     steps:
-      - name: Checkout repository
+      - name: Checkout repository (updated branch head)
         uses: actions/checkout@v4
         with:
-          ref: release
-          
-      - name: Pull latest changes
-        run: git pull
+          fetch-depth: 0
+          ref: ${{ github.ref }}
 
-      - name: Install node
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 'lts/*'
+          cache: 'npm'
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -130,68 +150,90 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-          
-      - name: Install frontend dependencies
-        run: npm install
 
-      - name: Build the app
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build the app (tauri)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           distPath: "dist"
-          tagName: v${{ inputs.version_name }}
-          releaseName: 'VeloDown v${{ inputs.version_name }}'
-          releaseBody: |
-            See the changelog for details.
-            
-            ---
-            Download the installer for your OS below.
+          tagName: v${{ needs.prepare-release.outputs.version }}
+          releaseName: 'VeloDown v${{ needs.prepare-release.outputs.version }}'
+          releaseBody: ${{ needs.prepare-release.outputs.release_notes || 'See the changelog for details.' }}
           releaseDraft: false
           prerelease: ${{ inputs.mark_prerelease }}
           args: ${{ matrix.args }}
 
-      - name: Generate SHA256 checksums
+      - name: Generate SHA256 checksums (Linux)
+        if: matrix.platform == 'ubuntu-latest'
         shell: bash
         run: |
-          if [ "${{ matrix.platform }}" == "windows-latest" ]; then
-            BUNDLE_DIR="src-tauri/target/release/bundle"
-            EXT="exe|msi"
-          elif [ "${{ matrix.platform }}" == "ubuntu-latest" ]; then
-            BUNDLE_DIR="src-tauri/target/release/bundle"
-            EXT="deb|AppImage"
-          else
-            # macOS's universal target
-            BUNDLE_DIR="src-tauri/target/universal-apple-darwin/release/bundle"
-            EXT="dmg|app"
-          fi
-
-          # Check if directory exists
-          if [ ! -d "$BUNDLE_DIR" ]; then
-            echo "Bundle directory not found: $BUNDLE_DIR"
-            echo "Searching for bundle directories..."
-            find src-tauri/target -name "bundle" -type d
-            exit 1
-          fi
-
-          # Create checksums file
+          set -e
+          BUNDLE_DIR="src-tauri/target/release/bundle"
+          EXT="deb|AppImage"
           echo "# SHA256 Checksums for ${{ matrix.artifact-name }}" > SHA256SUMS.txt
           echo "Generated on $(date)" >> SHA256SUMS.txt
           echo "" >> SHA256SUMS.txt
+          if [ -d "$BUNDLE_DIR" ]; then
+            find "$BUNDLE_DIR" -type f -regex ".*\.\($EXT\)" -print0 | xargs -0 -I{} sh -c 'sha256sum "{}" | awk "{print \$1\"  \"\$2}" >> SHA256SUMS.txt'
+          else
+            echo "Bundle dir not found: $BUNDLE_DIR" >&2
+            exit 1
+          fi
+          cat SHA256SUMS.txt
 
-          # Find and hash files
-          find $BUNDLE_DIR -type f -regex ".*\.\($EXT\)" | while read -r file; do
-            HASH=$(sha256sum "$file" | cut -d ' ' -f 1)
-            FILENAME=$(basename "$file")
-            echo "$HASH  $FILENAME" >> SHA256SUMS.txt
-            echo "File: $FILENAME"
-            echo "SHA256: $HASH"
-          done
+      - name: Generate SHA256 checksums (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $BUNDLE_DIR="src-tauri/target/release/bundle"
+          if (!(Test-Path $BUNDLE_DIR)) {
+            "Bundle dir not found: $BUNDLE_DIR" | Write-Error
+            exit 1
+          }
+          "# SHA256 Checksums for ${{ matrix.artifact-name }}" | Out-File -FilePath SHA256SUMS.txt -Encoding utf8
+          "Generated on $(Get-Date)" | Out-File -FilePath SHA256SUMS.txt -Append -Encoding utf8
+          "" | Out-File -FilePath SHA256SUMS.txt -Append -Encoding utf8
+          Get-ChildItem -Path $BUNDLE_DIR -Recurse -Include *.msi,*.exe | ForEach-Object {
+            $h = (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$h  $($_.Name)" | Out-File -FilePath SHA256SUMS.txt -Append -Encoding utf8
+          }
+          Get-Content SHA256SUMS.txt
+
+      - name: Generate SHA256 checksums (macOS)
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          set -e
+          BUNDLE_DIR="src-tauri/target/universal-apple-darwin/release/bundle"
+          echo "# SHA256 Checksums for ${{ matrix.artifact-name }}" > SHA256SUMS.txt
+          echo "Generated on $(date)" >> SHA256SUMS.txt
+          echo "" >> SHA256SUMS.txt
+          if [ -d "$BUNDLE_DIR" ]; then
+            # Hash dmg and app bundles (for .app, hash the zip of the bundle for consistency)
+            find "$BUNDLE_DIR" -type f -name "*.dmg" -print0 | xargs -0 -I{} sh -c 'shasum -a 256 "{}" | awk "{print \$1\"  \"\$2}" >> SHA256SUMS.txt'
+            # If .app exists, zip it and hash the zip
+            APP_PATH="$(find "$BUNDLE_DIR" -type d -name "*.app" -print -quit || true)"
+            if [ -n "$APP_PATH" ]; then
+              ZIP_OUT="${APP_PATH%/}.zip"
+              ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_OUT"
+              shasum -a 256 "$ZIP_OUT" | awk '{print $1"  "$2}' >> SHA256SUMS.txt
+            fi
+          else
+            echo "Bundle dir not found: $BUNDLE_DIR" >&2
+            exit 1
+          fi
+          cat SHA256SUMS.txt
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact-name }}-build
+          if-no-files-found: error
+          retention-days: 14
           path: |
             ${{ matrix.platform == 'macos-latest' && 'src-tauri/target/universal-apple-darwin/release/bundle/**/*' || 'src-tauri/target/release/bundle/**/*' }}
             SHA256SUMS.txt
@@ -216,47 +258,36 @@ jobs:
         shell: pwsh
         run: |
           $exeFile = Get-ChildItem -Path "./choco-artifacts" -Filter "*.exe" -Recurse | Select-Object -First 1
-          if ($null -eq $exeFile) {
-            Write-Error "No exe file found!"
-            exit 1
-          }
-          Write-Output "exe_path=$($exeFile.FullName)" >> $env:GITHUB_OUTPUT
-          Write-Output "exe_name=$($exeFile.Name)" >> $env:GITHUB_OUTPUT
+          if ($null -eq $exeFile) { Write-Error "No exe file found!"; exit 1 }
+          "exe_path=$($exeFile.FullName)" >> $env:GITHUB_OUTPUT
+          "exe_name=$($exeFile.Name)" >> $env:GITHUB_OUTPUT
 
       - name: Get SHA256 hash
         id: get-hash
         shell: pwsh
         run: |
           $hash = (Get-FileHash -Path "${{ steps.find-exe.outputs.exe_path }}" -Algorithm SHA256).Hash
-          Write-Output "sha256=$($hash.ToLower())" >> $env:GITHUB_OUTPUT
+          "sha256=$($hash.ToLower())" >> $env:GITHUB_OUTPUT
 
       - name: Setup Chocolatey package files
         shell: pwsh
         run: |
-          # Create package directory structure
-          New-Item -ItemType Directory -Force -Path "./packaging/chocolatey/tools"
-          
-          # Copy template files from repository
+          New-Item -ItemType Directory -Force -Path "./choco-package/tools" | Out-Null
           Copy-Item -Path "./packaging/chocolatey/velodown.nuspec" -Destination "./choco-package/"
-          Copy-Item -Path "./packaging/chocolatey/tools/*" -Destination "./choco-package/tools/" -Recurse
+          Copy-Item -Path "./packaging/chocolatey/tools/*" -Destination "./choco-package/tools/" -Recurse -Force
 
       - name: Update Chocolatey files
         shell: pwsh
         run: |
-          # Update nuspec
           $nuspecPath = "./choco-package/velodown.nuspec"
-          $content = Get-Content $nuspecPath
-          $content = $content -replace "{{VERSION}}", "${{ inputs.version_name }}"
-          $content | Set-Content $nuspecPath
-
-          # Update install script
+          ((Get-Content $nuspecPath -Raw) -replace "{{VERSION}}","${{ inputs.version_name }}") | Set-Content $nuspecPath
           $installPath = "./choco-package/tools/chocolateyinstall.ps1"
-          $content = Get-Content $installPath
-          $content = $content -replace "{{VERSION}}", "${{ inputs.version_name }}"
-          $content = $content -replace "{{SHA256_HASH}}", "${{ steps.get-hash.outputs.sha256 }}"
-          $content = $content -replace "{{DOWNLOAD_URL}}", "https://github.com/mlm-games/velodown/releases/download/v${{ inputs.version_name }}"
-          $content = $content -replace "{{APPNAME}}", "VeloDown"
-          $content | Set-Content $installPath
+          $content = Get-Content $installPath -Raw
+          $content = $content -replace "{{VERSION}}","${{ inputs.version_name }}"
+          $content = $content -replace "{{SHA256_HASH}}","${{ steps.get-hash.outputs.sha256 }}"
+          $content = $content -replace "{{DOWNLOAD_URL}}","https://github.com/mlm-games/velodown/releases/download/v${{ inputs.version_name }}"
+          $content = $content -replace "{{APPNAME}}","VeloDown"
+          Set-Content $installPath $content
 
       - name: Pack and push Chocolatey package
         shell: pwsh
@@ -287,6 +318,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Install jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
       - name: Download Windows build artifact
         uses: actions/download-artifact@v4
         with:
@@ -296,55 +332,51 @@ jobs:
       - name: Get installer info
         id: get-info
         run: |
-          # Find the exe installer
+          set -e
           EXE_FILE=$(find ./windows-build -name "*.exe" -type f | head -n 1)
           if [ -z "$EXE_FILE" ]; then
             echo "::error::No EXE file found!"
             exit 1
           fi
-          
-          # Get hash from SHA256SUMS.txt or calculate it
           if [ -f "./windows-build/SHA256SUMS.txt" ]; then
-            HASH=$(grep "$(basename "$EXE_FILE")" ./windows-build/SHA256SUMS.txt | cut -d' ' -f1)
+            HASH=$(grep "$(basename "$EXE_FILE")" ./windows-build/SHA256SUMS.txt | awk '{print $1}')
           else
-            HASH=$(sha256sum "$EXE_FILE" | cut -d' ' -f1)
+            HASH=$(sha256sum "$EXE_FILE" | awk '{print $1}')
           fi
-          
-          echo "sha256=${HASH}" >> $GITHUB_OUTPUT
+          echo "sha256=$HASH" >> $GITHUB_OUTPUT
           echo "exe_name=$(basename "$EXE_FILE")" >> $GITHUB_OUTPUT
 
       - name: Checkout Scoop bucket
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/buckets-scoop  
+          repository: ${{ github.repository_owner }}/buckets-scoop
           token: ${{ secrets.SCOOP_TOKEN || secrets.GITHUB_TOKEN }}
           path: scoop-bucket
+          fetch-depth: 0
 
       - name: Update Scoop manifest
         run: |
+          set -e
           cd scoop-bucket/bucket
-          
-          # Create manifest if it doesn't exist
           if [ ! -f "velodown.json" ]; then
             cp ../../packaging/scoop/velodown.json .
           fi
-          
-          # Update the manifest using jq
           jq --arg version "${{ inputs.version_name }}" \
              --arg hash "${{ steps.get-info.outputs.sha256 }}" \
              --arg url "https://github.com/mlm-games/velodown/releases/download/v${{ inputs.version_name }}/${{ steps.get-info.outputs.exe_name }}" \
-             '.version = $version | 
-              .architecture."64bit".url = $url | 
+             '.version = $version |
+              .architecture."64bit".url = $url |
               .architecture."64bit".hash = $hash' \
              velodown.json > velodown.json.tmp && mv velodown.json.tmp velodown.json
 
       - name: Commit and push changes
         run: |
+          set -e
           cd scoop-bucket
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
           git add bucket/velodown.json
-          git commit -m "Update VeloDown to ${{ inputs.version_name }}"
+          git commit -m "Update VeloDown to ${{ inputs.version_name }}" || echo "No changes to commit"
           git push
 
   publish-snap:
@@ -355,42 +387,41 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: release
-          
+          ref: ${{ github.ref }}
+
       - name: Download Linux build
         uses: actions/download-artifact@v4
         with:
           name: Linux-x64-build
-          path: ./linux-build
-          
+          # path defaults to ./Linux-x64-build
+
       - name: Extract AppImage
+        shell: bash
         run: |
-          # Find AppImage
-          APPIMAGE=$(find ./linux-build -name "*.AppImage" -type f | head -n 1)
+          set -e
+          APPIMAGE=$(find ./Linux-x64-build -name "*.AppImage" -type f | head -n 1)
           if [ -z "$APPIMAGE" ]; then
             echo "No AppImage found!"
             exit 1
           fi
-          
           chmod +x "$APPIMAGE"
           "$APPIMAGE" --appimage-extract
-          
-          # Copy binary
-          cp squashfs-root/usr/bin/velodown ./builds/velodown || cp squashfs-root/velodown ./builds/velodown
+          mkdir -p ./builds
+          # Copy binary (common locations differ by project)
+          cp squashfs-root/usr/bin/velodown ./builds/velodown 2>/dev/null || cp squashfs-root/velodown ./builds/velodown
           chmod +x ./builds/velodown
-          
+
       - name: Update snap files
+        shell: bash
         run: |
-          # Update version
+          set -e
           sed -i "s/{{VERSION}}/${{ inputs.version_name }}/g" packaging/snap/snapcraft.yaml
-          
-          # Copy snap files
           cp -r packaging/snap/* .
-          
+
       - name: Build snap
-        uses: snapcore/action-build@v1
         id: build
-        
+        uses: snapcore/action-build@v1
+
       - name: Publish to Snap Store
         uses: snapcore/action-publish@v1
         env:
@@ -419,5 +450,4 @@ jobs:
                 increment_pkgrel: 'false'
               }
             });
-
-            console.log('Triggered AUR publish workflow for version ${{ inputs.version_name }}');
+            core.info('Triggered AUR publish workflow for version ${{ inputs.version_name }}');
