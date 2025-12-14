@@ -6,11 +6,6 @@ on:
       version_name:
         description: 'Version name (e.g., 0.1.25)'
         required: true
-      increment_pkgrel:
-        description: 'Increment pkgrel (for same version updates)'
-        required: false
-        default: false
-        type: boolean
 
 jobs:
   update-aur:
@@ -36,26 +31,6 @@ jobs:
           APPIMAGE_HASH=$(sha256sum downloads/velodown.AppImage | cut -d ' ' -f 1)
           echo "appimage_hash=$APPIMAGE_HASH" >> $GITHUB_OUTPUT
       
-      - name: Get current pkgrel from AUR
-        id: current_pkgrel
-        run: |
-          # Try to get current PKGBUILD from AUR
-          CURRENT_PKGREL=$(curl -s "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=velodown-bin" | grep "^pkgrel=" | cut -d= -f2 || echo "0")
-          echo "current_pkgrel=$CURRENT_PKGREL" >> $GITHUB_OUTPUT
-        continue-on-error: true
-      
-      - name: Determine pkgrel
-        id: pkgrel
-        run: |
-          if [[ "${{ inputs.increment_pkgrel }}" == "true" ]]; then
-            CURRENT=${{ steps.current_pkgrel.outputs.current_pkgrel }}
-            NEW_PKGREL=$((CURRENT + 1))
-            echo "pkgrel=$NEW_PKGREL" >> $GITHUB_OUTPUT
-          else
-            echo "pkgrel=1" >> $GITHUB_OUTPUT
-          fi
-
-      
       - name: Create PKGBUILD
         run: |
           mkdir -p aur-package
@@ -63,7 +38,7 @@ jobs:
           # Maintainer: MLM-stuff <gfxoxinzh@mozmail.com>
           pkgname=velodown-bin
           pkgver=${{ inputs.version_name }}
-          pkgrel=${{ steps.pkgrel.outputs.pkgrel }}
+          pkgrel=1
           pkgdesc="A blazing-fast download manager built with Rust and Tauri"
           arch=('x86_64')
           url="https://github.com/mlm-games/velodown"
@@ -140,13 +115,15 @@ jobs:
                   done
               fi
           }
+          EOF
       
       - name: Publish to AUR
-        uses: KSXGitHub/github-actions-deploy-aur@master
+        uses: mlm-games/aur-deploy-action@master
         with:
           pkgname: velodown-bin
           pkgbuild: aur-package/PKGBUILD
+          auto_pkgrel: 'true'
           commit_username: MLM-stuff
           commit_email: gfxoxinzh@mozmail.com
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: "Update to version ${{ inputs.version_name }}-${{ steps.pkgrel.outputs.pkgrel }}"
+          commit_message: "Update to version ${{ inputs.version_name }}"
